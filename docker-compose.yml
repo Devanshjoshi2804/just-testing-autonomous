@@ -1,0 +1,188 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Main API Service - FastAPI Backend
+  # ============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autotest-rl-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source code for hot reload during development
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./results:/app/results
+      - ./uploads:/app/uploads
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - LLAMAPARSE_API_KEY=${LLAMAPARSE_API_KEY}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8001
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - chromadb
+      - redis
+    networks:
+      - autotest-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # ChromaDB - Vector Database for RAG
+  # ============================================================================
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: autotest-chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data/chroma_storage:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=False
+      - ALLOW_RESET=True
+    networks:
+      - autotest-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # Redis - Task Queue for Async Processing
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: autotest-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - autotest-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # ============================================================================
+  # Celery Worker - Background Task Processing
+  # ============================================================================
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autotest-celery-worker
+    command: celery -A src.tasks.celery_app worker --loglevel=info --concurrency=4
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./results:/app/results
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - LLAMAPARSE_API_KEY=${LLAMAPARSE_API_KEY}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8001
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+      - chromadb
+    networks:
+      - autotest-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # Celery Beat - Periodic Task Scheduler
+  # ============================================================================
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autotest-celery-beat
+    command: celery -A src.tasks.celery_app beat --loglevel=info
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    networks:
+      - autotest-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # Flower - Celery Monitoring Dashboard (Optional)
+  # ============================================================================
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autotest-flower
+    command: celery -A src.tasks.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+      - celery_worker
+    networks:
+      - autotest-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # RL Training Service (Optional - for dedicated RL training)
+  # ============================================================================
+  rl_trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autotest-rl-trainer
+    command: python -m src.rl.train_agent
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8001
+    depends_on:
+      - chromadb
+    networks:
+      - autotest-network
+    restart: "no"
+    profiles:
+      - training  # Only start with: docker-compose --profile training up
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  autotest-network:
+    driver: bridge
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  redis_data:
+    driver: local
