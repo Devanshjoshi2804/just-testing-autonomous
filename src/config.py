@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     LLAMAPARSE_API_KEY: str = Field(default="", description="LlamaParse API Key")
 
     # ========================================================================
+    # Ollama Configuration (Local LLM)
+    # ========================================================================
+    OLLAMA_HOST: str = "ollama"
+    OLLAMA_PORT: int = 11434
+    OLLAMA_BASE_URL: str = "http://ollama:11434"
+
+    # ========================================================================
     # Database Configuration
     # ========================================================================
     CHROMA_HOST: str = "chromadb"
@@ -65,10 +72,10 @@ class Settings(BaseSettings):
     # ========================================================================
     # LLM Model Selection
     # ========================================================================
-    LLM_PROVIDER: Literal["openai", "anthropic", "groq"] = "groq"
-    LLM_MODEL: str = "meta-llama/llama-4-maverick-17b-128e-instruct"
-    FAST_LLM_PROVIDER: Literal["openai", "anthropic", "groq"] = "groq"
-    FAST_LLM_MODEL: str = "meta-llama/llama-4-maverick-17b-128e-instruct"
+    LLM_PROVIDER: Literal["ollama", "openai", "anthropic", "groq"] = "ollama"
+    LLM_MODEL: str = "phi3.5:3.8b"  # Local: phi3.5:3.8b, llama3.2:3b, gemma2:2b
+    FAST_LLM_PROVIDER: Literal["ollama", "openai", "anthropic", "groq"] = "ollama"
+    FAST_LLM_MODEL: str = "llama3.2:3b"  # Fastest local model
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_TOKENS: int = 4096
 
@@ -168,7 +175,15 @@ settings = Settings()
 # ============================================================================
 def get_llm_client():
     """Get LLM client based on provider configuration"""
-    if settings.LLM_PROVIDER == "openai":
+    if settings.LLM_PROVIDER == "ollama":
+        from langchain_community.llms import Ollama
+        return Ollama(
+            base_url=settings.OLLAMA_BASE_URL,
+            model=settings.LLM_MODEL,
+            temperature=settings.LLM_TEMPERATURE,
+            num_ctx=settings.LLM_MAX_TOKENS,
+        )
+    elif settings.LLM_PROVIDER == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model=settings.LLM_MODEL,
