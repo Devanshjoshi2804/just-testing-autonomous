@@ -118,13 +118,21 @@ async def root():
 
 
 # ============================================================================
-# API Routes (to be imported)
+# API Routes
 # ============================================================================
-# TODO: Add routers
-# from src.api.routes import documents, tests, results
-# app.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
-# app.include_router(tests.router, prefix="/api/v1/tests", tags=["Tests"])
-# app.include_router(results.router, prefix="/api/v1/results", tags=["Results"])
+from src.api.routes import documents_router, tests_router
+
+app.include_router(
+    documents_router,
+    prefix="/api/v1/documents",
+    tags=["Documents"]
+)
+
+app.include_router(
+    tests_router,
+    prefix="/api/v1/tests",
+    tags=["Tests"]
+)
 
 
 # ============================================================================
