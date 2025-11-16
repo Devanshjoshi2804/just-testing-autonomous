@@ -16,6 +16,11 @@ import time
 from loguru import logger
 
 from src.config import settings
+from src.api.health import comprehensive_health_check, readiness_check, liveness_check
+from src.api.middleware.request_id import request_id_middleware
+from src.api.middleware.logging_middleware import logging_middleware
+from src.api.middleware.security import security_headers_middleware
+from src.exceptions import AutoTestException, create_error_response
 
 # ============================================================================
 # Application Lifespan Management
@@ -65,8 +70,18 @@ app.add_middleware(
 
 
 # ============================================================================
-# Request Timing Middleware
+# Custom Middleware Stack
 # ============================================================================
+# Security headers (applied first)
+app.middleware("http")(security_headers_middleware)
+
+# Request ID tracking
+app.middleware("http")(request_id_middleware)
+
+# Structured logging
+app.middleware("http")(logging_middleware)
+
+# Request timing
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     """Add processing time to response headers"""
@@ -80,6 +95,17 @@ async def add_process_time_header(request: Request, call_next):
 # ============================================================================
 # Exception Handlers
 # ============================================================================
+@app.exception_handler(AutoTestException)
+async def autotest_exception_handler(request: Request, exc: AutoTestException):
+    """Handler for custom AutoTest exceptions"""
+    logger.warning(f"AutoTest exception: {exc.message}", extra={"details": exc.details})
+    error_response = create_error_response(exc, status_code=400)
+    return JSONResponse(
+        status_code=400,
+        content=error_response,
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
@@ -98,12 +124,32 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ============================================================================
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Docker"""
+    """Simple health check endpoint for Docker"""
     return {
         "status": "healthy",
         "environment": settings.ENVIRONMENT,
         "version": "0.1.0",
     }
+
+
+@app.get("/health/detailed")
+async def health_detailed():
+    """Comprehensive health check with all service statuses"""
+    return await comprehensive_health_check()
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness check - are all dependencies ready?"""
+    result = await readiness_check()
+    status_code = 200 if result["ready"] else 503
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.get("/health/live")
+async def health_live():
+    """Liveness check - is the service alive?"""
+    return await liveness_check()
 
 
 @app.get("/")
