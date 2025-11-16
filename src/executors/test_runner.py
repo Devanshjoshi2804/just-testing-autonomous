@@ -18,6 +18,8 @@ from src.agents.error_fixer import ErrorFixer
 from src.rag.doc_store import DocumentStore
 from src.rag.flow_store import FlowStore
 from src.rl.test_optimizer import TestOptimizer
+from src.analysis.change_detector import ChangeDetector
+from src.testing.test_healer import TestHealer
 
 
 class TestRunner:
@@ -33,7 +35,8 @@ class TestRunner:
         doc_store: DocumentStore,
         max_retries: int = None,
         use_rl: bool = True,
-        semantic_contexts: Optional[Dict] = None
+        semantic_contexts: Optional[Dict] = None,
+        comprehensive_mode: bool = False
     ):
         """
         Initialize Test Runner
@@ -45,6 +48,7 @@ class TestRunner:
             max_retries: Max retry attempts (default from settings)
             use_rl: Use RL-based test prioritization (default True)
             semantic_contexts: Optional semantic contexts from documentation analysis
+            comprehensive_mode: Generate comprehensive test suite (semantic + LLM + mutation tests)
         """
         self.base_url = base_url.rstrip('/')
         self.session_id = session_id
@@ -52,6 +56,7 @@ class TestRunner:
         self.max_retries = max_retries or settings.MAX_RETRIES
         self.use_rl = use_rl
         self.semantic_contexts = semantic_contexts
+        self.comprehensive_mode = comprehensive_mode
 
         # Initialize Flow Store for this session
         self.flow_store = FlowStore(session_id=session_id)
@@ -59,14 +64,17 @@ class TestRunner:
         # Initialize agents
         self.analyzer = EndpointAnalyzer()
 
-        # Use EnhancedTestGenerator if semantic contexts available
-        if semantic_contexts:
+        # Use EnhancedTestGenerator if semantic contexts available or comprehensive mode enabled
+        if semantic_contexts or comprehensive_mode:
             self.generator = EnhancedTestGenerator(
                 doc_store,
                 self.flow_store,
-                semantic_contexts=semantic_contexts
+                semantic_contexts=semantic_contexts,
+                enable_mutation_testing=True,
+                max_mutations_per_pattern=3
             )
-            logger.info(f"🧠 Using EnhancedTestGenerator with semantic contexts for {len(semantic_contexts)} endpoints")
+            mode = "comprehensive" if comprehensive_mode else "semantic"
+            logger.info(f"🧠 Using EnhancedTestGenerator ({mode} mode) for {len(semantic_contexts or {})} endpoints")
         else:
             self.generator = TestGenerator(doc_store, self.flow_store)
             logger.info("Using standard TestGenerator")
@@ -81,11 +89,20 @@ class TestRunner:
             self.rl_optimizer = None
             logger.info("Traditional test ordering enabled")
 
+        # Initialize self-healing components
+        self.change_detector = ChangeDetector()
+        self.test_healer = TestHealer(auto_heal=True, require_confirmation=False)
+        self.healing_history = []
+        logger.info("🔄 Self-Healing Tests enabled")
+
         # Test results
         self.results = []
 
         # Endpoint metadata tracking for RL
         self.endpoint_metadata = {}
+
+        # Expected responses tracking (for change detection)
+        self.expected_responses = {}
 
         # HTTP client (will be created in async context)
         self.client = None
@@ -153,6 +170,16 @@ class TestRunner:
             # If successful, return
             if result['success']:
                 logger.info(f"✅ SUCCESS on attempt {attempt}")
+
+                # Set baseline expected response on first successful test
+                if endpoint_key not in self.expected_responses:
+                    self.set_expected_response(
+                        endpoint_key,
+                        result['status_code'],
+                        result['response']
+                    )
+                    logger.debug(f"📝 Set baseline response for {endpoint_key}")
+
                 return result
 
             # If last attempt, return failure
@@ -182,6 +209,88 @@ class TestRunner:
             await asyncio.sleep(settings.RETRY_DELAY_SECONDS)
 
         return result  # Should never reach here, but just in case
+
+    async def test_endpoint_comprehensive(
+        self,
+        endpoint: Dict[str, Any],
+        headers: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Test endpoint with comprehensive test suite (semantic + LLM + mutation tests)
+
+        Args:
+            endpoint: Endpoint dict from analyzer
+            headers: Optional custom headers
+
+        Returns:
+            List of test results
+        """
+        if not hasattr(self.generator, 'generate_comprehensive_tests'):
+            logger.warning("Generator doesn't support comprehensive mode, falling back to single test")
+            result = await self.test_endpoint(endpoint, headers)
+            return [result]
+
+        endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"🧪 Comprehensive Testing: {endpoint_key}")
+        logger.info(f"{'=' * 80}")
+
+        # Generate comprehensive test suite
+        logger.info("🤖 Generating comprehensive test suite...")
+        all_tests = self.generator.generate_comprehensive_tests(endpoint)
+
+        logger.info(f"✅ Generated {len(all_tests)} tests")
+
+        # Prioritize tests
+        prioritized_tests = self.generator.prioritize_tests(all_tests)
+
+        # Prepare headers
+        test_headers = {"Content-Type": "application/json"}
+        if headers:
+            test_headers.update(headers)
+
+        # Add authentication if needed
+        if endpoint.get('auth_required'):
+            token = await self._get_auth_token()
+            if token:
+                test_headers['Authorization'] = f"Bearer {token}"
+                logger.info("🔑 Added authentication token")
+
+        # Execute each test
+        results = []
+        for idx, test in enumerate(prioritized_tests, 1):
+            test_name = test.get('name', f'Test {idx}')
+            test_source = test.get('source', 'unknown')
+            test_confidence = test.get('confidence', 'MEDIUM')
+
+            logger.info(f"\n🧪 Test {idx}/{len(prioritized_tests)}: {test_name}")
+            logger.info(f"   Source: {test_source} | Confidence: {test_confidence}")
+
+            payload = test.get('payload', {})
+
+            # Execute with single attempt (no retries for comprehensive mode)
+            result = await self._execute_request(
+                endpoint, payload, test_headers, attempt=1
+            )
+
+            # Add test metadata to result
+            result['test_name'] = test_name
+            result['test_source'] = test_source
+            result['test_type'] = test.get('type', 'unknown')
+            result['test_confidence'] = test_confidence
+            result['test_severity'] = test.get('severity')
+            result['test_pattern'] = test.get('pattern')
+
+            results.append(result)
+
+            # Small delay between tests
+            await asyncio.sleep(0.2)
+
+        # Summary
+        passed = sum(1 for r in results if r.get('success'))
+        logger.info(f"\n✅ Comprehensive tests: {passed}/{len(results)} passed")
+
+        return results
 
     async def _execute_request(
         self,
@@ -283,6 +392,65 @@ class TestRunner:
                 'response': response_data,
                 'headers': headers,
             }
+
+            # Self-Healing: Detect API changes and auto-heal tests
+            if endpoint_key in self.expected_responses:
+                expected = self.expected_responses[endpoint_key]
+                actual = {
+                    'status_code': response.status_code,
+                    'body': response_data
+                }
+
+                # Detect changes
+                changes = self.change_detector.detect_changes(expected, actual)
+
+                if changes:
+                    logger.info(f"🔄 Detected {len(changes)} API changes")
+
+                    # Build test spec for healing
+                    test_spec = {
+                        'name': f'Test for {endpoint_key}',
+                        'endpoint': endpoint_key,
+                        'expected_status': expected.get('status_code', 200),
+                        'expected_response': expected.get('body', {})
+                    }
+
+                    # Try to heal the test
+                    healed_test = self.test_healer.heal_test(test_spec, actual, changes)
+
+                    # Update expected response with healed version
+                    self.expected_responses[endpoint_key] = {
+                        'status_code': healed_test.get('expected_status'),
+                        'body': healed_test.get('expected_response')
+                    }
+
+                    # Track healing action
+                    healing_record = {
+                        'endpoint': endpoint_key,
+                        'timestamp': datetime.now().isoformat(),
+                        'changes_detected': len(changes),
+                        'changes': [
+                            {
+                                'type': c.change_type,
+                                'field': c.field_path,
+                                'severity': c.severity,
+                                'description': c.description
+                            }
+                            for c in changes
+                        ],
+                        'healed': True,
+                        'auto_heal': True
+                    }
+                    self.healing_history.append(healing_record)
+
+                    # Add healing info to result
+                    result['self_healing'] = {
+                        'changes_detected': len(changes),
+                        'auto_healed': True,
+                        'healing_actions': len(self.healing_history)
+                    }
+
+                    logger.info(f"✅ Test auto-healed (total healing actions: {len(self.healing_history)})")
 
             return result
 
@@ -507,17 +675,33 @@ class TestRunner:
                     f"{priority_icon} Priority: {rl_priority.upper()}"
                 )
 
-                result = await self.test_endpoint(endpoint)
+                # Use comprehensive mode if enabled
+                if self.comprehensive_mode:
+                    endpoint_results = await self.test_endpoint_comprehensive(endpoint)
 
-                # Add RL metadata to result
-                result['rl_priority'] = rl_priority
-                result['rl_state'] = endpoint.get('rl_state')
+                    # Add RL metadata to all results
+                    for result in endpoint_results:
+                        result['rl_priority'] = rl_priority
+                        result['rl_state'] = endpoint.get('rl_state')
+                        self.results.append(result)
 
-                self.results.append(result)
+                    # Update endpoint metadata based on any failures
+                    endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+                    any_success = any(r.get('success', False) for r in endpoint_results)
+                    self._update_endpoint_metadata(endpoint_key, any_success)
 
-                # Update endpoint metadata
-                endpoint_key = result.get('endpoint', '')
-                self._update_endpoint_metadata(endpoint_key, result.get('success', False))
+                else:
+                    result = await self.test_endpoint(endpoint)
+
+                    # Add RL metadata to result
+                    result['rl_priority'] = rl_priority
+                    result['rl_state'] = endpoint.get('rl_state')
+
+                    self.results.append(result)
+
+                    # Update endpoint metadata
+                    endpoint_key = result.get('endpoint', '')
+                    self._update_endpoint_metadata(endpoint_key, result.get('success', False))
 
             # Small delay between tests
             await asyncio.sleep(0.5)
@@ -635,6 +819,55 @@ class TestRunner:
 
         logger.info(f"{'=' * 80}\n")
 
+    def set_expected_response(self, endpoint_key: str, status_code: int, body: Dict[str, Any]):
+        """
+        Set expected response for an endpoint (for change detection)
+
+        Args:
+            endpoint_key: Endpoint identifier (e.g., "POST /api/users")
+            status_code: Expected status code
+            body: Expected response body
+        """
+        self.expected_responses[endpoint_key] = {
+            'status_code': status_code,
+            'body': body
+        }
+
+    def get_healing_report(self) -> Dict[str, Any]:
+        """
+        Get self-healing report
+
+        Returns:
+            Report dict with healing statistics and history
+        """
+        if not self.healing_history:
+            return {
+                'total_healing_actions': 0,
+                'endpoints_healed': 0,
+                'history': [],
+                'healer_stats': self.test_healer.get_healing_report()
+            }
+
+        endpoints_healed = len(set(h['endpoint'] for h in self.healing_history))
+        total_changes = sum(h['changes_detected'] for h in self.healing_history)
+
+        # Categorize changes by severity
+        severity_counts = {'BREAKING': 0, 'NON_BREAKING': 0, 'MINOR': 0}
+        for record in self.healing_history:
+            for change in record.get('changes', []):
+                severity = change.get('severity', 'UNKNOWN')
+                if severity in severity_counts:
+                    severity_counts[severity] += 1
+
+        return {
+            'total_healing_actions': len(self.healing_history),
+            'endpoints_healed': endpoints_healed,
+            'total_changes_detected': total_changes,
+            'severity_breakdown': severity_counts,
+            'history': self.healing_history,
+            'healer_stats': self.test_healer.get_healing_report()
+        }
+
     def get_results_summary(self) -> Dict[str, Any]:
         """
         Get structured summary of test results
@@ -658,6 +891,7 @@ class TestRunner:
             "avg_time": sum(r.get('elapsed_time', 0) for r in self.results) / len(self.results),
             "total_attempts": sum(r.get('attempts', 1) for r in self.results),
             "flow_stats": self.flow_store.get_stats(),
+            "healing_report": self.get_healing_report(),
             "results": self.results,
         }
 
