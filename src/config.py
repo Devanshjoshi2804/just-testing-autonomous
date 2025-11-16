@@ -46,6 +46,26 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
 
     # ========================================================================
+    # Celery Configuration
+    # ========================================================================
+    CELERY_BROKER_URL: str = Field(
+        default="redis://redis:6379/0",
+        description="Celery broker URL (Redis)"
+    )
+    CELERY_RESULT_BACKEND: str = Field(
+        default="redis://redis:6379/0",
+        description="Celery result backend (Redis)"
+    )
+    CELERY_TASK_SERIALIZER: str = "json"
+    CELERY_RESULT_SERIALIZER: str = "json"
+    CELERY_ACCEPT_CONTENT: List[str] = ["json"]
+    CELERY_TIMEZONE: str = "UTC"
+    CELERY_ENABLE_UTC: bool = True
+    CELERY_TASK_TRACK_STARTED: bool = True
+    CELERY_TASK_TIME_LIMIT: int = 600  # 10 minutes
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
+
+    # ========================================================================
     # API Configuration
     # ========================================================================
     API_HOST: str = "0.0.0.0"
