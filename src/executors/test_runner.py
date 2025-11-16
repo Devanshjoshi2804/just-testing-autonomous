@@ -13,6 +13,7 @@ from loguru import logger
 from src.config import settings
 from src.agents.endpoint_analyzer import EndpointAnalyzer
 from src.agents.test_generator import TestGenerator
+from src.agents.enhanced_test_generator import EnhancedTestGenerator
 from src.agents.error_fixer import ErrorFixer
 from src.rag.doc_store import DocumentStore
 from src.rag.flow_store import FlowStore
@@ -31,7 +32,8 @@ class TestRunner:
         session_id: str,
         doc_store: DocumentStore,
         max_retries: int = None,
-        use_rl: bool = True
+        use_rl: bool = True,
+        semantic_contexts: Optional[Dict] = None
     ):
         """
         Initialize Test Runner
@@ -42,19 +44,33 @@ class TestRunner:
             doc_store: Document store for RAG
             max_retries: Max retry attempts (default from settings)
             use_rl: Use RL-based test prioritization (default True)
+            semantic_contexts: Optional semantic contexts from documentation analysis
         """
         self.base_url = base_url.rstrip('/')
         self.session_id = session_id
         self.doc_store = doc_store
         self.max_retries = max_retries or settings.MAX_RETRIES
         self.use_rl = use_rl
+        self.semantic_contexts = semantic_contexts
 
         # Initialize Flow Store for this session
         self.flow_store = FlowStore(session_id=session_id)
 
         # Initialize agents
         self.analyzer = EndpointAnalyzer()
-        self.generator = TestGenerator(doc_store, self.flow_store)
+
+        # Use EnhancedTestGenerator if semantic contexts available
+        if semantic_contexts:
+            self.generator = EnhancedTestGenerator(
+                doc_store,
+                self.flow_store,
+                semantic_contexts=semantic_contexts
+            )
+            logger.info(f"🧠 Using EnhancedTestGenerator with semantic contexts for {len(semantic_contexts)} endpoints")
+        else:
+            self.generator = TestGenerator(doc_store, self.flow_store)
+            logger.info("Using standard TestGenerator")
+
         self.fixer = ErrorFixer(doc_store, self.flow_store)
 
         # Initialize RL optimizer

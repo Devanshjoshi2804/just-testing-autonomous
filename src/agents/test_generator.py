@@ -6,7 +6,17 @@ import json
 import random
 import string
 from typing import Dict, Any, Optional
-from loguru import logger
+
+# Optional logger
+try:
+    from loguru import logger
+except ImportError:
+    class MockLogger:
+        def info(self, msg, **kwargs): print(f"INFO: {msg}")
+        def warning(self, msg, **kwargs): print(f"WARN: {msg}")
+        def error(self, msg, **kwargs): print(f"ERROR: {msg}")
+        def debug(self, msg, **kwargs): pass
+    logger = MockLogger()
 
 from src.agents.base_agent import BaseAgent
 from src.rag.doc_store import DocumentStore

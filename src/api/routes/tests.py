@@ -40,7 +40,8 @@ async def run_test_session_async(
     base_url: str,
     endpoints: list,
     max_retries: int,
-    use_optimal_order: bool
+    use_optimal_order: bool,
+    semantic_contexts: dict = None
 ):
     """
     Background task to run test session asynchronously
@@ -52,6 +53,7 @@ async def run_test_session_async(
         endpoints: List of endpoints to test
         max_retries: Max retry attempts
         use_optimal_order: Use optimal testing order
+        semantic_contexts: Optional semantic contexts from documentation
     """
     try:
         logger.info(f"Starting background test session: {session_id}")
@@ -63,8 +65,14 @@ async def run_test_session_async(
         # Create document store for RAG
         doc_store = DocumentStore(collection_name=f"doc_{document_id}")
 
-        # Run tests
-        async with TestRunner(base_url, session_id, doc_store, max_retries) as runner:
+        # Run tests with semantic contexts
+        async with TestRunner(
+            base_url,
+            session_id,
+            doc_store,
+            max_retries,
+            semantic_contexts=semantic_contexts
+        ) as runner:
             results = await runner.test_all_endpoints(endpoints, ordered=use_optimal_order)
 
             # Get summary
@@ -187,6 +195,11 @@ async def start_test_execution(
         logger.info(f"Created test session: {session_id} for document: {request.document_id}")
         logger.info(f"Total endpoints: {len(endpoints)}, Max retries: {request.max_retries}")
 
+        # Get semantic contexts if available
+        semantic_contexts = doc_metadata.get("semantic_contexts", {})
+        if semantic_contexts:
+            logger.info(f"📚 Using semantic contexts for {len(semantic_contexts)} endpoints")
+
         # Start background task
         background_tasks.add_task(
             run_test_session_async,
@@ -195,7 +208,8 @@ async def start_test_execution(
             base_url=base_url,
             endpoints=endpoints,
             max_retries=request.max_retries,
-            use_optimal_order=request.use_optimal_order
+            use_optimal_order=request.use_optimal_order,
+            semantic_contexts=semantic_contexts
         )
 
         logger.info(f"🚀 Started background test execution: {session_id}")

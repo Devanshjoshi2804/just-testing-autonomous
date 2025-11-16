@@ -19,6 +19,7 @@ from src.models import (
     EndpointInfo
 )
 from src.parsers.document_parser import DocumentParser
+from src.parsers.enhanced_document_parser import EnhancedDocumentParser
 from src.parsers.text_splitter import DocumentChunker
 from src.rag.doc_store import DocumentStore
 from src.agents.endpoint_analyzer import EndpointAnalyzer
@@ -85,23 +86,40 @@ async def upload_document(
 
         logger.info(f"File uploaded: {file.filename} ({file_size} bytes)")
 
-        # Parse document
-        parser = DocumentParser()
-        parsed = parser.parse(file_path)
+        # Parse document with semantic analysis
+        logger.info("🧠 Parsing document with semantic analysis...")
+        enhanced_parser = EnhancedDocumentParser(enable_semantic_analysis=True)
+        parsed = enhanced_parser.parse(file_path)
 
         # Extract base URL if not provided
         if not base_url:
-            base_url = parser.extract_base_url(parsed)
+            base_url = DocumentParser().extract_base_url(parsed)
 
         # Chunk text
         chunker = DocumentChunker()
         chunks = chunker.chunk_text(parsed['raw_text'])
 
-        # Store in ChromaDB
+        # Store in ChromaDB with semantic metadata
         doc_store = DocumentStore(collection_name=f"doc_{doc_id}")
+
+        # Add semantic context to chunk metadata if available
+        semantic_summary = parsed.get('semantic_summary', {})
+        for chunk in chunks:
+            chunk['metadata']['semantic_quality'] = semantic_summary.get('overall_quality', 'UNKNOWN')
+            chunk['metadata']['has_semantic_context'] = semantic_summary.get('endpoints_with_context', 0) > 0
+
         doc_store.add_documents(chunks)
 
         logger.info(f"Created {len(chunks)} chunks in ChromaDB")
+
+        # Log semantic analysis results
+        if semantic_summary:
+            logger.info(
+                f"📚 Semantic Analysis: {semantic_summary.get('endpoints_with_context', 0)} endpoints "
+                f"with {semantic_summary.get('total_examples', 0)} examples, "
+                f"{semantic_summary.get('total_best_practices', 0)} best practices, "
+                f"{semantic_summary.get('total_common_errors', 0)} error scenarios"
+            )
 
         # Analyze endpoints with AI
         analyzer = EndpointAnalyzer()
@@ -115,7 +133,7 @@ async def upload_document(
 
         logger.info(f"Found {len(endpoints)} endpoints")
 
-        # Store metadata
+        # Store metadata with semantic contexts
         doc_metadata = {
             "id": doc_id,
             "filename": file.filename,
@@ -128,6 +146,9 @@ async def upload_document(
             "uploaded_at": datetime.now(),
             "name": name or file.filename,
             "description": description,
+            # NEW: Store semantic contexts for intelligent test generation
+            "semantic_contexts": parsed.get('semantic_contexts', {}),
+            "semantic_summary": semantic_summary,
         }
         documents_db[doc_id] = doc_metadata
 
