@@ -36,7 +36,8 @@ class TestRunner:
         max_retries: int = None,
         use_rl: bool = True,
         semantic_contexts: Optional[Dict] = None,
-        comprehensive_mode: bool = False
+        comprehensive_mode: bool = False,
+        parameter_constraints: Optional[Dict] = None
     ):
         """
         Initialize Test Runner
@@ -49,6 +50,7 @@ class TestRunner:
             use_rl: Use RL-based test prioritization (default True)
             semantic_contexts: Optional semantic contexts from documentation analysis
             comprehensive_mode: Generate comprehensive test suite (semantic + LLM + mutation tests)
+            parameter_constraints: Optional parameter constraints for test data generation
         """
         self.base_url = base_url.rstrip('/')
         self.session_id = session_id
@@ -57,6 +59,7 @@ class TestRunner:
         self.use_rl = use_rl
         self.semantic_contexts = semantic_contexts
         self.comprehensive_mode = comprehensive_mode
+        self.parameter_constraints = parameter_constraints or {}
 
         # Initialize Flow Store for this session
         self.flow_store = FlowStore(session_id=session_id)
@@ -78,6 +81,15 @@ class TestRunner:
         else:
             self.generator = TestGenerator(doc_store, self.flow_store)
             logger.info("Using standard TestGenerator")
+
+        # Log constraint availability
+        if self.parameter_constraints:
+            total_endpoints = len(self.parameter_constraints)
+            total_params_with_constraints = sum(
+                sum(1 for p in params.values() if p.get('constraints'))
+                for params in self.parameter_constraints.values()
+            )
+            logger.info(f"🔍 Parameter constraints loaded for {total_endpoints} endpoints ({total_params_with_constraints} params with constraints)")
 
         self.fixer = ErrorFixer(doc_store, self.flow_store)
 

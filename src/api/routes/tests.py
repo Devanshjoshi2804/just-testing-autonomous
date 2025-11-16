@@ -42,7 +42,8 @@ async def run_test_session_async(
     max_retries: int,
     use_optimal_order: bool,
     comprehensive_mode: bool = True,
-    semantic_contexts: dict = None
+    semantic_contexts: dict = None,
+    parameter_constraints: dict = None
 ):
     """
     Background task to run test session asynchronously
@@ -56,6 +57,7 @@ async def run_test_session_async(
         use_optimal_order: Use optimal testing order
         comprehensive_mode: Enable comprehensive test generation
         semantic_contexts: Optional semantic contexts from documentation
+        parameter_constraints: Optional parameter constraints for test data generation
     """
     try:
         logger.info(f"Starting background test session: {session_id}")
@@ -67,14 +69,15 @@ async def run_test_session_async(
         # Create document store for RAG
         doc_store = DocumentStore(collection_name=f"doc_{document_id}")
 
-        # Run tests with semantic contexts and comprehensive mode
+        # Run tests with semantic contexts, comprehensive mode, and constraints
         async with TestRunner(
             base_url,
             session_id,
             doc_store,
             max_retries,
             semantic_contexts=semantic_contexts,
-            comprehensive_mode=comprehensive_mode
+            comprehensive_mode=comprehensive_mode,
+            parameter_constraints=parameter_constraints
         ) as runner:
             results = await runner.test_all_endpoints(endpoints, ordered=use_optimal_order)
 
@@ -210,6 +213,12 @@ async def start_test_execution(
         if semantic_contexts:
             logger.info(f"📚 Using semantic contexts for {len(semantic_contexts)} endpoints")
 
+        # Get parameter constraints if available
+        parameter_constraints = doc_metadata.get("parameter_constraints", {})
+        if parameter_constraints:
+            total_with_constraints = doc_metadata.get("constraints_coverage", {}).get("parameters_with_constraints", 0)
+            logger.info(f"🔍 Using parameter constraints for {total_with_constraints} parameters")
+
         # Start background task
         background_tasks.add_task(
             run_test_session_async,
@@ -220,7 +229,8 @@ async def start_test_execution(
             max_retries=request.max_retries,
             use_optimal_order=request.use_optimal_order,
             comprehensive_mode=request.comprehensive_mode,
-            semantic_contexts=semantic_contexts
+            semantic_contexts=semantic_contexts,
+            parameter_constraints=parameter_constraints
         )
 
         logger.info(f"🚀 Started background test execution: {session_id}")

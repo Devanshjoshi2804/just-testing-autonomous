@@ -95,6 +95,14 @@ class DocumentUploadResponse(BaseModel):
     endpoints_found: int = Field(..., description="Number of endpoints found")
     chunks_created: int = Field(..., description="Number of text chunks")
     uploaded_at: datetime = Field(..., description="Upload timestamp")
+    parameters_with_constraints: Optional[int] = Field(
+        None,
+        description="Number of parameters with extracted constraints"
+    )
+    constraints_coverage: Optional[float] = Field(
+        None,
+        description="Percentage of parameters with constraints"
+    )
 
     class Config:
         json_schema_extra = {
@@ -106,6 +114,8 @@ class DocumentUploadResponse(BaseModel):
                 "base_url": "https://api.example.com",
                 "endpoints_found": 12,
                 "chunks_created": 8,
+                "parameters_with_constraints": 24,
+                "constraints_coverage": 85.7,
                 "uploaded_at": "2025-01-15T10:30:00Z"
             }
         }

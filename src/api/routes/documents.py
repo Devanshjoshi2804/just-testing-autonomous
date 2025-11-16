@@ -23,6 +23,7 @@ from src.parsers.enhanced_document_parser import EnhancedDocumentParser
 from src.parsers.text_splitter import DocumentChunker
 from src.rag.doc_store import DocumentStore
 from src.agents.endpoint_analyzer import EndpointAnalyzer
+from src.analysis.constraint_extractor import ConstraintExtractor
 
 
 router = APIRouter()
@@ -133,7 +134,68 @@ async def upload_document(
 
         logger.info(f"Found {len(endpoints)} endpoints")
 
-        # Store metadata with semantic contexts
+        # Extract constraints for all endpoints
+        logger.info("🔍 Extracting parameter constraints...")
+        constraint_extractor = ConstraintExtractor()
+        endpoint_constraints = {}
+
+        for endpoint in endpoints:
+            endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+
+            # Extract constraints from endpoint definition + documentation
+            constraints = constraint_extractor.extract_constraints(
+                endpoint=endpoint,
+                documentation=parsed['raw_text']
+            )
+
+            endpoint_constraints[endpoint_key] = constraints
+
+            # Log what we found
+            params_with_constraints = sum(
+                1 for c in constraints.values() if c.constraints
+            )
+            if params_with_constraints > 0:
+                logger.info(
+                    f"  {endpoint_key}: {params_with_constraints}/{len(constraints)} "
+                    f"params with constraints"
+                )
+
+        # Get constraint extraction summary
+        total_params = sum(len(c) for c in endpoint_constraints.values())
+        total_with_constraints = sum(
+            sum(1 for param in c.values() if param.constraints)
+            for c in endpoint_constraints.values()
+        )
+
+        logger.info(
+            f"✅ Constraint extraction complete: {total_with_constraints}/{total_params} "
+            f"params have constraints ({total_with_constraints/total_params*100 if total_params > 0 else 0:.1f}%)"
+        )
+
+        # Convert constraints to serializable format
+        serializable_constraints = {}
+        for endpoint_key, constraints_map in endpoint_constraints.items():
+            serializable_constraints[endpoint_key] = {
+                param_name: {
+                    'name': param_constraints.name,
+                    'type': param_constraints.type,
+                    'required': param_constraints.required,
+                    'description': param_constraints.description,
+                    'example_values': param_constraints.example_values,
+                    'constraints': [
+                        {
+                            'type': c.constraint_type,
+                            'value': c.value,
+                            'description': c.description,
+                            'confidence': c.confidence
+                        }
+                        for c in param_constraints.constraints
+                    ]
+                }
+                for param_name, param_constraints in constraints_map.items()
+            }
+
+        # Store metadata with semantic contexts and constraints
         doc_metadata = {
             "id": doc_id,
             "filename": file.filename,
@@ -146,9 +208,16 @@ async def upload_document(
             "uploaded_at": datetime.now(),
             "name": name or file.filename,
             "description": description,
-            # NEW: Store semantic contexts for intelligent test generation
+            # Semantic contexts for intelligent test generation
             "semantic_contexts": parsed.get('semantic_contexts', {}),
             "semantic_summary": semantic_summary,
+            # NEW: Parameter constraints for constraint-aware test data generation
+            "parameter_constraints": serializable_constraints,
+            "constraints_coverage": {
+                "total_parameters": total_params,
+                "parameters_with_constraints": total_with_constraints,
+                "coverage_percentage": total_with_constraints/total_params*100 if total_params > 0 else 0
+            }
         }
         documents_db[doc_id] = doc_metadata
 
@@ -161,7 +230,9 @@ async def upload_document(
             base_url=extracted_base_url,
             endpoints_found=len(endpoints),
             chunks_created=len(chunks),
-            uploaded_at=doc_metadata["uploaded_at"]
+            uploaded_at=doc_metadata["uploaded_at"],
+            parameters_with_constraints=total_with_constraints,
+            constraints_coverage=round(total_with_constraints/total_params*100, 1) if total_params > 0 else 0
         )
 
         logger.info(f"✅ Document uploaded successfully: {doc_id}")
