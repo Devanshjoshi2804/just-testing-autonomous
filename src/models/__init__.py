@@ -59,6 +59,11 @@ class TestExecutionRequest(BaseModel):
     document_id: str = Field(..., description="Document ID to test")
     max_retries: Optional[int] = Field(3, ge=1, le=5, description="Max retry attempts per endpoint")
     use_optimal_order: Optional[bool] = Field(True, description="Use optimal testing order")
+    comprehensive_mode: Optional[bool] = Field(
+        True,
+        description="Enable comprehensive testing (semantic + LLM + security mutation tests). "
+                   "When enabled, generates 40+ tests per endpoint instead of 1-3 basic tests."
+    )
     test_types: Optional[List[TestType]] = Field(
         [TestType.POSITIVE],
         description="Types of tests to run"
@@ -70,6 +75,7 @@ class TestExecutionRequest(BaseModel):
                 "document_id": "doc_abc123",
                 "max_retries": 3,
                 "use_optimal_order": True,
+                "comprehensive_mode": True,
                 "test_types": ["positive"]
             }
         }

@@ -41,6 +41,7 @@ async def run_test_session_async(
     endpoints: list,
     max_retries: int,
     use_optimal_order: bool,
+    comprehensive_mode: bool = True,
     semantic_contexts: dict = None
 ):
     """
@@ -53,6 +54,7 @@ async def run_test_session_async(
         endpoints: List of endpoints to test
         max_retries: Max retry attempts
         use_optimal_order: Use optimal testing order
+        comprehensive_mode: Enable comprehensive test generation
         semantic_contexts: Optional semantic contexts from documentation
     """
     try:
@@ -65,13 +67,14 @@ async def run_test_session_async(
         # Create document store for RAG
         doc_store = DocumentStore(collection_name=f"doc_{document_id}")
 
-        # Run tests with semantic contexts
+        # Run tests with semantic contexts and comprehensive mode
         async with TestRunner(
             base_url,
             session_id,
             doc_store,
             max_retries,
-            semantic_contexts=semantic_contexts
+            semantic_contexts=semantic_contexts,
+            comprehensive_mode=comprehensive_mode
         ) as runner:
             results = await runner.test_all_endpoints(endpoints, ordered=use_optimal_order)
 
@@ -190,11 +193,17 @@ async def start_test_execution(
         # Store session
         test_sessions_db[session_id] = session_metadata
 
-        # Calculate estimated duration (rough estimate: 3s per endpoint)
-        estimated_duration = len(endpoints) * 3
+        # Calculate estimated duration
+        # Comprehensive mode: ~40 tests per endpoint * 0.5s = ~20s per endpoint
+        # Basic mode: 1 test per endpoint * 3s (with retries) = ~3s per endpoint
+        if request.comprehensive_mode:
+            estimated_duration = len(endpoints) * 20
+        else:
+            estimated_duration = len(endpoints) * 3
 
         logger.info(f"Created test session: {session_id} for document: {request.document_id}")
         logger.info(f"Total endpoints: {len(endpoints)}, Max retries: {request.max_retries}")
+        logger.info(f"Comprehensive mode: {'ENABLED' if request.comprehensive_mode else 'DISABLED'}")
 
         # Get semantic contexts if available
         semantic_contexts = doc_metadata.get("semantic_contexts", {})
@@ -210,6 +219,7 @@ async def start_test_execution(
             endpoints=endpoints,
             max_retries=request.max_retries,
             use_optimal_order=request.use_optimal_order,
+            comprehensive_mode=request.comprehensive_mode,
             semantic_contexts=semantic_contexts
         )
 
