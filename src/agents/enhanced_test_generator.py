@@ -18,6 +18,7 @@ except ImportError:
 
 from src.agents.test_generator import TestGenerator
 from src.testing.semantic_test_generator import SemanticTestGenerator
+from src.testing.mutation_test_generator import MutationTestGenerator
 from src.analysis.semantic_doc_analyzer import DocumentationContext
 
 
@@ -26,17 +27,21 @@ class EnhancedTestGenerator(TestGenerator):
     Test generator that combines:
     1. Traditional LLM-based generation (from TestGenerator)
     2. Semantic test generation (from SemanticTestGenerator)
+    3. Security mutation testing (from MutationTestGenerator)
 
-    This gives us BOTH:
+    This gives us COMPREHENSIVE coverage:
     - Creative, LLM-generated tests
     - Authoritative, documentation-based tests
+    - Security-focused, OWASP Top 10 tests
     """
 
     def __init__(
         self,
         doc_store,
         flow_store=None,
-        semantic_contexts: Optional[Dict[str, DocumentationContext]] = None
+        semantic_contexts: Optional[Dict[str, DocumentationContext]] = None,
+        enable_mutation_testing: bool = True,
+        max_mutations_per_pattern: int = 3
     ):
         """
         Initialize Enhanced Test Generator
@@ -45,15 +50,27 @@ class EnhancedTestGenerator(TestGenerator):
             doc_store: Document store for RAG
             flow_store: Flow store for previous test data
             semantic_contexts: Dict of endpoint semantic contexts
+            enable_mutation_testing: Enable security mutation testing
+            max_mutations_per_pattern: Max mutations per security pattern
         """
         super().__init__(doc_store, flow_store)
 
         self.semantic_generator = SemanticTestGenerator()
         self.semantic_contexts = semantic_contexts or {}
 
+        self.enable_mutation_testing = enable_mutation_testing
+        if enable_mutation_testing:
+            self.mutation_generator = MutationTestGenerator(
+                max_tests_per_pattern=max_mutations_per_pattern
+            )
+            logger.info("🛡️ Security mutation testing enabled")
+        else:
+            self.mutation_generator = None
+
         logger.info(
             f"EnhancedTestGenerator initialized "
-            f"(semantic_contexts={len(self.semantic_contexts)})"
+            f"(semantic_contexts={len(self.semantic_contexts)}, "
+            f"mutation_testing={enable_mutation_testing})"
         )
 
     def generate_comprehensive_tests(
@@ -66,6 +83,7 @@ class EnhancedTestGenerator(TestGenerator):
         Combines:
         1. Semantic tests from documentation (if available)
         2. LLM-generated tests (positive, negative, boundary)
+        3. Security mutation tests (OWASP Top 10)
 
         Args:
             endpoint: Endpoint dict
@@ -135,6 +153,20 @@ class EnhancedTestGenerator(TestGenerator):
             'expected_status': 200,
             'confidence': 'LOW'
         })
+
+        # Part 3: Security mutation tests
+        if self.enable_mutation_testing and self.mutation_generator:
+            logger.info(f"  🛡️ Generating security mutation tests...")
+
+            # Use positive payload as base for mutations
+            mutation_tests = self.mutation_generator.generate_mutation_tests(
+                endpoint,
+                base_payload=positive_payload
+            )
+
+            all_tests.extend(mutation_tests)
+
+            logger.info(f"  ✅ Generated {len(mutation_tests)} security mutation tests")
 
         logger.info(f"  ✅ Generated 3 LLM-based tests")
 
@@ -262,11 +294,18 @@ JSON payload:
             endpoint: Endpoint dict
 
         Returns:
-            Summary dict
+            Summary dict with semantic, LLM, and mutation test counts
         """
         endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
 
         semantic_context = self.semantic_contexts.get(endpoint_key)
+
+        # Get mutation test summary
+        mutation_summary = {}
+        mutation_count = 0
+        if self.enable_mutation_testing and self.mutation_generator:
+            mutation_summary = self.mutation_generator.get_mutation_summary(endpoint)
+            mutation_count = mutation_summary.get('total_tests', 0)
 
         if semantic_context:
             semantic_summary = self.semantic_generator.explain_test_generation(
@@ -278,12 +317,22 @@ JSON payload:
                 'has_semantic_context': True,
                 'semantic_tests': semantic_summary['test_types'],
                 'llm_tests': {'positive': 1, 'negative': 1, 'boundary': 1},
-                'total_estimated_tests': sum(semantic_summary['test_types'].values()) + 3,
+                'mutation_tests': mutation_summary.get('by_severity', {}),
+                'total_estimated_tests': sum(semantic_summary['test_types'].values()) + 3 + mutation_count,
                 'sources': {
                     **semantic_summary['sources_used'],
-                    'llm_generated': 3
+                    'llm_generated': 3,
+                    'mutation_testing': mutation_count
                 },
-                'coverage_quality': 'HIGH' if sum(semantic_summary['sources_used'].values()) > 10 else 'MEDIUM'
+                'security_coverage': {
+                    'total_security_tests': mutation_count,
+                    'by_severity': mutation_summary.get('by_severity', {}),
+                    'by_pattern': mutation_summary.get('by_pattern', {}),
+                },
+                'coverage_quality': self._calculate_coverage_quality(
+                    semantic_summary['sources_used'],
+                    mutation_count
+                )
             }
         else:
             return {
@@ -291,17 +340,43 @@ JSON payload:
                 'has_semantic_context': False,
                 'semantic_tests': {},
                 'llm_tests': {'positive': 1, 'negative': 1, 'boundary': 1},
-                'total_estimated_tests': 3,
-                'sources': {'llm_generated': 3},
-                'coverage_quality': 'BASIC'
+                'mutation_tests': mutation_summary.get('by_severity', {}),
+                'total_estimated_tests': 3 + mutation_count,
+                'sources': {
+                    'llm_generated': 3,
+                    'mutation_testing': mutation_count
+                },
+                'security_coverage': {
+                    'total_security_tests': mutation_count,
+                    'by_severity': mutation_summary.get('by_severity', {}),
+                    'by_pattern': mutation_summary.get('by_pattern', {}),
+                },
+                'coverage_quality': 'MEDIUM' if mutation_count > 0 else 'BASIC'
             }
+
+    def _calculate_coverage_quality(
+        self,
+        semantic_sources: Dict[str, int],
+        mutation_count: int
+    ) -> str:
+        """Calculate overall coverage quality rating"""
+        semantic_total = sum(semantic_sources.values())
+
+        if semantic_total > 10 and mutation_count > 5:
+            return 'EXCELLENT'
+        elif semantic_total > 10 or mutation_count > 5:
+            return 'HIGH'
+        elif semantic_total > 0 or mutation_count > 0:
+            return 'MEDIUM'
+        else:
+            return 'BASIC'
 
     def prioritize_tests(
         self,
         tests: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Prioritize tests based on confidence and source
+        Prioritize tests based on confidence, source, and severity
 
         Args:
             tests: List of test cases
@@ -313,13 +388,26 @@ JSON payload:
             # Documentation-based tests (highest priority)
             'documentation_example': 1,  # Golden! Exact documented usage
             'documented_error': 2,       # Known error scenarios
-            'documented_edge_case': 3,   # Known edge cases
-            'best_practice': 4,          # Recommended patterns
-            'business_rule': 5,          # Business constraints
+
+            # Security tests (high priority for CRITICAL/HIGH severity)
+            'mutation_testing': 3,       # OWASP Top 10 security tests
+
+            # Other documentation tests
+            'documented_edge_case': 4,   # Known edge cases
+            'best_practice': 5,          # Recommended patterns
+            'business_rule': 6,          # Business constraints
 
             # LLM-based tests (lower priority)
-            'use_case': 6,               # Scenario tests
-            'llm_generated': 7,          # Generic LLM tests
+            'use_case': 7,               # Scenario tests
+            'llm_generated': 8,          # Generic LLM tests
+        }
+
+        # Severity order for security tests
+        severity_order = {
+            'CRITICAL': 0,
+            'HIGH': 1,
+            'MEDIUM': 2,
+            'LOW': 3,
         }
 
         confidence_order = {
@@ -331,18 +419,25 @@ JSON payload:
         def test_priority(test):
             source = test.get('source', 'llm_generated')
             confidence = test.get('confidence', 'MEDIUM')
+            severity = test.get('severity', 'LOW')  # For security tests
 
             source_priority = priority_order.get(source, 99)
             confidence_priority = confidence_order.get(confidence, 15)
+            severity_priority = severity_order.get(severity, 10)
+
+            # For security tests, factor in severity
+            if source == 'mutation_testing':
+                # CRITICAL/HIGH severity security tests get boosted priority
+                return (source_priority, severity_priority, confidence_priority)
 
             # Lower number = higher priority
-            return (source_priority, confidence_priority)
+            return (source_priority, confidence_priority, severity_priority)
 
         sorted_tests = sorted(tests, key=test_priority)
 
         logger.info(
             f"Prioritized {len(sorted_tests)} tests "
-            f"(golden tests first, then by confidence)"
+            f"(golden tests → security → confidence)"
         )
 
         return sorted_tests
