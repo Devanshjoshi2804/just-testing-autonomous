@@ -4,6 +4,7 @@ Combines all agents and systems for end-to-end testing
 """
 import asyncio
 import time
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlencode
 import httpx
@@ -15,6 +16,7 @@ from src.agents.test_generator import TestGenerator
 from src.agents.error_fixer import ErrorFixer
 from src.rag.doc_store import DocumentStore
 from src.rag.flow_store import FlowStore
+from src.rl.test_optimizer import TestOptimizer
 
 
 class TestRunner:
@@ -28,7 +30,8 @@ class TestRunner:
         base_url: str,
         session_id: str,
         doc_store: DocumentStore,
-        max_retries: int = None
+        max_retries: int = None,
+        use_rl: bool = True
     ):
         """
         Initialize Test Runner
@@ -38,11 +41,13 @@ class TestRunner:
             session_id: Unique session ID for this test run
             doc_store: Document store for RAG
             max_retries: Max retry attempts (default from settings)
+            use_rl: Use RL-based test prioritization (default True)
         """
         self.base_url = base_url.rstrip('/')
         self.session_id = session_id
         self.doc_store = doc_store
         self.max_retries = max_retries or settings.MAX_RETRIES
+        self.use_rl = use_rl
 
         # Initialize Flow Store for this session
         self.flow_store = FlowStore(session_id=session_id)
@@ -52,8 +57,19 @@ class TestRunner:
         self.generator = TestGenerator(doc_store, self.flow_store)
         self.fixer = ErrorFixer(doc_store, self.flow_store)
 
+        # Initialize RL optimizer
+        if use_rl:
+            self.rl_optimizer = TestOptimizer()
+            logger.info("🧠 RL Test Optimizer enabled")
+        else:
+            self.rl_optimizer = None
+            logger.info("Traditional test ordering enabled")
+
         # Test results
         self.results = []
+
+        # Endpoint metadata tracking for RL
+        self.endpoint_metadata = {}
 
         # HTTP client (will be created in async context)
         self.client = None
@@ -308,13 +324,91 @@ class TestRunner:
 
         return None
 
+    def _build_test_context(self) -> Dict[str, Any]:
+        """
+        Build context for RL state representation
+
+        Returns:
+            Context dict with current test environment state
+        """
+        return {
+            'time': datetime.now(),
+            'session_id': self.session_id,
+            'dependency_health': 100,  # Default to healthy, can be enhanced
+        }
+
+    def _enrich_endpoint_metadata(self, endpoint: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enrich endpoint with metadata for RL
+
+        Args:
+            endpoint: Endpoint dict
+
+        Returns:
+            Endpoint dict with added metadata
+        """
+        endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+
+        # Get or create metadata
+        if endpoint_key not in self.endpoint_metadata:
+            self.endpoint_metadata[endpoint_key] = {
+                'total_tests': 0,
+                'failures': 0,
+                'last_test_time': None,
+                'last_failure_time': None,
+            }
+
+        metadata = self.endpoint_metadata[endpoint_key]
+
+        # Calculate failure rate
+        failure_rate = 0
+        if metadata['total_tests'] > 0:
+            failure_rate = (metadata['failures'] / metadata['total_tests']) * 100
+
+        # Calculate days since change (placeholder - can be enhanced with git integration)
+        days_since_change = 30  # Default to "stable"
+
+        # Add enriched data to endpoint
+        enriched = {
+            **endpoint,
+            'failure_rate': failure_rate,
+            'days_since_change': days_since_change,
+            'total_tests': metadata['total_tests'],
+        }
+
+        return enriched
+
+    def _update_endpoint_metadata(self, endpoint_key: str, success: bool):
+        """
+        Update endpoint metadata after test
+
+        Args:
+            endpoint_key: Endpoint identifier
+            success: Whether test passed
+        """
+        if endpoint_key not in self.endpoint_metadata:
+            self.endpoint_metadata[endpoint_key] = {
+                'total_tests': 0,
+                'failures': 0,
+                'last_test_time': None,
+                'last_failure_time': None,
+            }
+
+        metadata = self.endpoint_metadata[endpoint_key]
+        metadata['total_tests'] += 1
+        metadata['last_test_time'] = datetime.now()
+
+        if not success:
+            metadata['failures'] += 1
+            metadata['last_failure_time'] = datetime.now()
+
     async def test_all_endpoints(
         self,
         endpoints: List[Dict[str, Any]],
         ordered: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Test all endpoints
+        Test all endpoints with RL-based prioritization
 
         Args:
             endpoints: List of endpoint dicts
@@ -328,15 +422,32 @@ class TestRunner:
         logger.info(f"📊 Total Endpoints: {len(endpoints)}")
         logger.info(f"{'=' * 80}")
 
-        # Determine testing order
-        if ordered:
-            endpoint_order = self.analyzer.get_testing_order(endpoints)
-            logger.info(f"Using optimal testing order")
+        # Enrich endpoints with metadata for RL
+        enriched_endpoints = [
+            self._enrich_endpoint_metadata(ep) for ep in endpoints
+        ]
 
-            # Reorder endpoints
+        # Determine testing order
+        if ordered and self.use_rl and self.rl_optimizer:
+            logger.info("🧠 Using RL-based test prioritization")
+
+            # Build context for RL state
+            context = self._build_test_context()
+
+            # Let RL prioritize endpoints
+            ordered_endpoints = self.rl_optimizer.prioritize_endpoints(
+                enriched_endpoints,
+                context
+            )
+
+        elif ordered:
+            # Fallback to traditional analyzer ordering
+            logger.info("Using traditional analyzer ordering")
+            endpoint_order = self.analyzer.get_testing_order(enriched_endpoints)
+
             endpoint_map = {
                 f"{ep.get('method')} {ep.get('path')}": ep
-                for ep in endpoints
+                for ep in enriched_endpoints
             }
             ordered_endpoints = [
                 endpoint_map[key]
@@ -344,24 +455,135 @@ class TestRunner:
                 if key in endpoint_map
             ]
         else:
-            ordered_endpoints = endpoints
+            ordered_endpoints = enriched_endpoints
 
         # Test each endpoint
         self.results = []
 
         for idx, endpoint in enumerate(ordered_endpoints, 1):
-            logger.info(f"\n📍 Progress: {idx}/{len(ordered_endpoints)}")
+            rl_priority = endpoint.get('rl_priority', 'normal')
 
-            result = await self.test_endpoint(endpoint)
-            self.results.append(result)
+            # Skip if RL says to skip
+            if rl_priority == 'skip':
+                logger.info(
+                    f"\n📍 Progress: {idx}/{len(ordered_endpoints)} "
+                    f"⏭️  SKIPPING (RL confidence: high stability)"
+                )
+
+                # Still probe to validate RL decision (lightweight check)
+                skipped_result = await self._probe_endpoint(endpoint)
+                skipped_result['skipped'] = True
+                skipped_result['rl_priority'] = rl_priority
+                skipped_result['rl_state'] = endpoint.get('rl_state')
+
+                self.results.append(skipped_result)
+
+            else:
+                priority_icon = {
+                    'critical': '🔴',
+                    'high': '🟠',
+                    'normal': '🟡',
+                    'low': '🟢',
+                }[rl_priority]
+
+                logger.info(
+                    f"\n📍 Progress: {idx}/{len(ordered_endpoints)} "
+                    f"{priority_icon} Priority: {rl_priority.upper()}"
+                )
+
+                result = await self.test_endpoint(endpoint)
+
+                # Add RL metadata to result
+                result['rl_priority'] = rl_priority
+                result['rl_state'] = endpoint.get('rl_state')
+
+                self.results.append(result)
+
+                # Update endpoint metadata
+                endpoint_key = result.get('endpoint', '')
+                self._update_endpoint_metadata(endpoint_key, result.get('success', False))
 
             # Small delay between tests
             await asyncio.sleep(0.5)
+
+        # RL Learning: Update Q-values based on results
+        if self.use_rl and self.rl_optimizer:
+            logger.info("\n🎓 RL Learning from results...")
+            self.rl_optimizer.learn_from_results(self.results)
+
+            # Show RL metrics
+            metrics = self.rl_optimizer.get_metrics()
+            logger.info(f"📊 RL Metrics:")
+            logger.info(f"   Time saved: {metrics['time_saved']:.1f}s")
+            logger.info(f"   Failures caught: {metrics['failures_caught']}")
+            logger.info(f"   Failures missed: {metrics['failures_missed']}")
+            logger.info(f"   Correct skips: {metrics['correct_skips']}")
+            logger.info(f"   Avg reward: {metrics['avg_reward_per_episode']:+.2f}")
 
         # Print summary
         self._print_summary()
 
         return self.results
+
+    async def _probe_endpoint(self, endpoint: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Lightweight probe to check if skipped endpoint would have failed
+        Used for RL validation without full test execution
+
+        Args:
+            endpoint: Endpoint to probe
+
+        Returns:
+            Probe result dict
+        """
+        method = endpoint.get('method', 'GET').upper()
+        url = f"{self.base_url}{endpoint.get('path', '')}"
+        endpoint_key = f"{method} {endpoint.get('path', '')}"
+
+        start_time = time.time()
+
+        try:
+            # Quick HEAD or GET request (no payload)
+            if method in ['GET', 'HEAD']:
+                response = await self.client.request(method, url, timeout=5.0)
+            else:
+                # For POST/PUT/PATCH, just check if endpoint exists
+                response = await self.client.head(url, timeout=5.0)
+
+            elapsed_time = time.time() - start_time
+            success = 200 <= response.status_code < 300
+
+            return {
+                'endpoint': endpoint_key,
+                'url': url,
+                'method': method,
+                'status_code': response.status_code,
+                'success': success,
+                'would_have_failed': not success,
+                'elapsed_time': elapsed_time,
+                'attempts': 0,  # No retries for probes
+                'final_payload': {},
+                'response': {},
+                'estimated_time': 5.0,  # Estimated time saved
+            }
+
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+
+            return {
+                'endpoint': endpoint_key,
+                'url': url,
+                'method': method,
+                'status_code': 0,
+                'success': False,
+                'would_have_failed': True,
+                'elapsed_time': elapsed_time,
+                'attempts': 0,
+                'final_payload': {},
+                'response': {},
+                'error': str(e),
+                'estimated_time': 5.0,
+            }
 
     def _print_summary(self):
         """Print test session summary"""
