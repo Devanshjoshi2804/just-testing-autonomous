@@ -24,6 +24,7 @@ from src.parsers.text_splitter import DocumentChunker
 from src.rag.doc_store import DocumentStore
 from src.agents.endpoint_analyzer import EndpointAnalyzer
 from src.analysis.constraint_extractor import ConstraintExtractor
+from src.workflow.dependency_graph import DependencyGraph
 
 
 router = APIRouter()
@@ -172,6 +173,48 @@ async def upload_document(
             f"params have constraints ({total_with_constraints/total_params*100 if total_params > 0 else 0:.1f}%)"
         )
 
+        # Build dependency graph for workflow intelligence
+        logger.info("🔗 Building endpoint dependency graph...")
+        dependency_graph = DependencyGraph()
+        dependency_graph.build_graph(endpoints)
+
+        # Get graph summary
+        graph_summary = dependency_graph.get_graph_summary()
+        logger.info(
+            f"✅ Dependency graph built: {graph_summary['total_resources']} resources, "
+            f"{graph_summary['total_dependencies']} dependencies, "
+            f"{graph_summary['crud_resource_count']} complete CRUD chains"
+        )
+
+        # Convert dependencies to serializable format
+        serializable_dependencies = [
+            {
+                'source': dep.source_endpoint,
+                'target': dep.target_endpoint,
+                'type': dep.dependency_type,
+                'shared_resource': dep.shared_resource,
+                'confidence': dep.confidence,
+                'description': dep.description
+            }
+            for dep in dependency_graph.dependencies
+        ]
+
+        # Convert resources to serializable format
+        serializable_resources = {
+            name: {
+                'resource_name': res.resource_name,
+                'base_path': res.base_path,
+                'create_endpoint': res.create_endpoint,
+                'read_list_endpoint': res.read_list_endpoint,
+                'read_single_endpoint': res.read_single_endpoint,
+                'update_endpoint': res.update_endpoint,
+                'delete_endpoint': res.delete_endpoint,
+                'child_resources': res.child_resources,
+                'parent_resource': res.parent_resource
+            }
+            for name, res in dependency_graph.resources.items()
+        }
+
         # Convert constraints to serializable format
         serializable_constraints = {}
         for endpoint_key, constraints_map in endpoint_constraints.items():
@@ -211,12 +254,18 @@ async def upload_document(
             # Semantic contexts for intelligent test generation
             "semantic_contexts": parsed.get('semantic_contexts', {}),
             "semantic_summary": semantic_summary,
-            # NEW: Parameter constraints for constraint-aware test data generation
+            # Parameter constraints for constraint-aware test data generation
             "parameter_constraints": serializable_constraints,
             "constraints_coverage": {
                 "total_parameters": total_params,
                 "parameters_with_constraints": total_with_constraints,
                 "coverage_percentage": total_with_constraints/total_params*100 if total_params > 0 else 0
+            },
+            # NEW: Dependency graph for workflow intelligence
+            "dependency_graph": {
+                "dependencies": serializable_dependencies,
+                "resources": serializable_resources,
+                "summary": graph_summary
             }
         }
         documents_db[doc_id] = doc_metadata
