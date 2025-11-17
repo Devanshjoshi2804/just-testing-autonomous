@@ -20,6 +20,7 @@ from src.rag.flow_store import FlowStore
 from src.rl.test_optimizer import TestOptimizer
 from src.analysis.change_detector import ChangeDetector
 from src.testing.test_healer import TestHealer
+from src.workflow.data_flow_tracker import DataFlowTracker
 
 
 class TestRunner:
@@ -111,6 +112,10 @@ class TestRunner:
         self.test_healer = TestHealer(auto_heal=True, require_confirmation=False)
         self.healing_history = []
         logger.info("🔄 Self-Healing Tests enabled")
+
+        # Initialize data flow tracker for workflow intelligence
+        self.data_flow_tracker = DataFlowTracker()
+        logger.info("💉 Data Flow Tracker enabled (ID extraction & injection)")
 
         # Test results
         self.results = []
@@ -328,15 +333,30 @@ class TestRunner:
         Returns:
             Result dict with success, status_code, response, etc.
         """
-        endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+        # Extract resource name from path for data flow tracking
+        path = endpoint.get('path', '')
+        path_parts = [p for p in path.split('/') if p and not p.startswith('{')]
+        resource_hint = path_parts[-1] if path_parts else None
+
+        # Inject extracted values into path and payload
+        injected_path = self.data_flow_tracker.inject_into_path(path, resource_hint)
+        injected_payload = self.data_flow_tracker.inject_into_body(payload, resource_hint) if payload else payload
+
+        # Log injections if any occurred
+        if injected_path != path:
+            logger.debug(f"   💉 Injected values into path: {path} → {injected_path}")
+        if injected_payload != payload:
+            logger.debug(f"   💉 Injected values into payload")
+
+        endpoint_key = f"{endpoint.get('method', 'GET')} {injected_path}"
         method = endpoint.get('method', 'GET').upper()
-        url = f"{self.base_url}{endpoint.get('path', '')}"
+        url = f"{self.base_url}{injected_path}"
 
         logger.info(f"   URL: {url}")
         logger.info(f"   Method: {method}")
 
-        # Store request in Flow DB
-        self.flow_store.store_request(endpoint_key, payload, {"attempt": attempt})
+        # Store request in Flow DB (with injected payload)
+        self.flow_store.store_request(endpoint_key, injected_payload, {"attempt": attempt})
 
         start_time = time.time()
 
@@ -344,22 +364,22 @@ class TestRunner:
             # Execute request based on method
             if method == 'GET':
                 # Add payload as query params for GET
-                if payload:
-                    query_string = urlencode(payload)
+                if injected_payload:
+                    query_string = urlencode(injected_payload)
                     url = f"{url}?{query_string}"
                 response = await self.client.get(url, headers=headers)
 
             elif method == 'POST':
-                logger.info(f"   Payload: {str(payload)[:200]}...")
-                response = await self.client.post(url, headers=headers, json=payload)
+                logger.info(f"   Payload: {str(injected_payload)[:200]}...")
+                response = await self.client.post(url, headers=headers, json=injected_payload)
 
             elif method == 'PUT':
-                logger.info(f"   Payload: {str(payload)[:200]}...")
-                response = await self.client.put(url, headers=headers, json=payload)
+                logger.info(f"   Payload: {str(injected_payload)[:200]}...")
+                response = await self.client.put(url, headers=headers, json=injected_payload)
 
             elif method == 'PATCH':
-                logger.info(f"   Payload: {str(payload)[:200]}...")
-                response = await self.client.patch(url, headers=headers, json=payload)
+                logger.info(f"   Payload: {str(injected_payload)[:200]}...")
+                response = await self.client.patch(url, headers=headers, json=injected_payload)
 
             elif method == 'DELETE':
                 response = await self.client.delete(url, headers=headers)
@@ -405,7 +425,7 @@ class TestRunner:
                 'success': success,
                 'attempts': attempt,
                 'elapsed_time': elapsed_time,
-                'final_payload': payload,
+                'final_payload': injected_payload,  # Use injected payload
                 'response': response_data,
                 'headers': headers,
             }
@@ -468,6 +488,23 @@ class TestRunner:
                     }
 
                     logger.info(f"✅ Test auto-healed (total healing actions: {len(self.healing_history)})")
+
+            # Extract IDs and values from successful responses for data flow tracking
+            if success and isinstance(response_data, dict):
+                extracted_values = self.data_flow_tracker.extract_from_response(
+                    endpoint_key=endpoint_key,
+                    response_body=response_data,
+                    status_code=response.status_code
+                )
+                if extracted_values:
+                    logger.info(f"   💉 Extracted {len(extracted_values)} values for data flow")
+                    result['extracted_values'] = [
+                        {
+                            'field': ev.field_name,
+                            'value': str(ev.value)[:50]  # Truncate for display
+                        }
+                        for ev in extracted_values
+                    ]
 
             return result
 
