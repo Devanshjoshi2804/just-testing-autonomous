@@ -21,18 +21,24 @@ except ImportError:
 from src.agents.base_agent import BaseAgent
 from src.rag.doc_store import DocumentStore
 from src.rag.flow_store import FlowStore
+from src.generators.constraint_aware_data_generator import (
+    ConstraintAwareDataGenerator,
+    DataGenerationStrategy
+)
 
 
 class TestGenerator(BaseAgent):
     """
     Agent that generates test case payloads
     Uses RAG to retrieve relevant documentation and Flow DB for previous data
+    Now enhanced with constraint-aware data generation
     """
 
     def __init__(
         self,
         doc_store: DocumentStore,
-        flow_store: Optional[FlowStore] = None
+        flow_store: Optional[FlowStore] = None,
+        parameter_constraints: Optional[Dict[str, Dict]] = None
     ):
         """
         Initialize Test Generator
@@ -40,10 +46,15 @@ class TestGenerator(BaseAgent):
         Args:
             doc_store: Document store for RAG retrieval
             flow_store: Optional flow store for accessing previous test data
+            parameter_constraints: Optional parameter constraints for smart data generation
         """
         super().__init__(agent_name="TestGenerator", use_fast_llm=False)
         self.doc_store = doc_store
         self.flow_store = flow_store
+        self.parameter_constraints = parameter_constraints or {}
+
+        # Initialize constraint-aware data generator
+        self.constraint_generator = ConstraintAwareDataGenerator()
 
     def generate_test_payload(
         self,
@@ -63,22 +74,34 @@ class TestGenerator(BaseAgent):
         endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
         logger.info(f"Generating {test_type} test payload for: {endpoint_key}")
 
-        # Step 1: Retrieve relevant documentation via RAG
-        doc_context = self._retrieve_documentation_context(endpoint)
+        # Check if we have constraints for this endpoint
+        has_constraints = endpoint_key in self.parameter_constraints
 
-        # Step 2: Query Flow DB for previous data if available
-        flow_context = ""
-        if self.flow_store:
-            flow_context = self._retrieve_flow_context(endpoint)
+        if has_constraints:
+            # Use constraint-aware generation (SMART)
+            logger.info(f"  🔍 Using constraint-aware generation")
+            payload = self._generate_payload_with_constraints(endpoint, test_type)
+            logger.info(f"✅ Generated {test_type} payload with constraints: {json.dumps(payload)[:100]}...")
+            return payload
+        else:
+            # Fall back to LLM generation (TRADITIONAL)
+            logger.info(f"  🤖 No constraints found, using LLM generation")
 
-        # Step 3: Generate payload using LLM
-        payload = self._generate_payload_with_llm(
-            endpoint, doc_context, flow_context, test_type
-        )
+            # Step 1: Retrieve relevant documentation via RAG
+            doc_context = self._retrieve_documentation_context(endpoint)
 
-        logger.info(f"✅ Generated {test_type} payload: {json.dumps(payload)[:100]}...")
+            # Step 2: Query Flow DB for previous data if available
+            flow_context = ""
+            if self.flow_store:
+                flow_context = self._retrieve_flow_context(endpoint)
 
-        return payload
+            # Step 3: Generate payload using LLM
+            payload = self._generate_payload_with_llm(
+                endpoint, doc_context, flow_context, test_type
+            )
+
+            logger.info(f"✅ Generated {test_type} payload: {json.dumps(payload)[:100]}...")
+            return payload
 
     def _retrieve_documentation_context(
         self,
@@ -229,6 +252,51 @@ NO markdown, NO explanations, ONLY JSON."""
             logger.error(f"Failed to generate payload: {e}")
             # Return minimal payload based on parameters
             return self._generate_fallback_payload(endpoint, unique_suffix)
+
+    def _generate_payload_with_constraints(
+        self,
+        endpoint: Dict[str, Any],
+        test_type: str
+    ) -> Dict[str, Any]:
+        """
+        Generate payload using constraint-aware data generator
+
+        Args:
+            endpoint: Endpoint dict
+            test_type: Type of test (positive, negative, boundary)
+
+        Returns:
+            Generated payload dict
+        """
+        endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+
+        # Get constraints for this endpoint
+        endpoint_constraints = self.parameter_constraints.get(endpoint_key, {})
+
+        if not endpoint_constraints:
+            logger.warning(f"No constraints found for {endpoint_key}, falling back to LLM")
+            return self._generate_payload_with_llm(endpoint, "", "", test_type)
+
+        # Map test_type to generation strategy
+        if test_type == "positive":
+            strategy = DataGenerationStrategy.VALID
+        elif test_type == "negative":
+            strategy = DataGenerationStrategy.INVALID_TYPE
+        elif test_type == "boundary":
+            strategy = DataGenerationStrategy.BOUNDARY_MIN
+        else:
+            strategy = DataGenerationStrategy.VALID
+
+        # Generate payload using constraints
+        payload = self.constraint_generator.generate_payload_with_constraints(
+            endpoint=endpoint,
+            parameter_constraints=endpoint_constraints,
+            strategy=strategy
+        )
+
+        logger.debug(f"Generated payload with {len(payload)} fields using constraints")
+
+        return payload
 
     def _generate_fallback_payload(
         self,

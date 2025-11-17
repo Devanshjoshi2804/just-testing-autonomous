@@ -41,7 +41,8 @@ class EnhancedTestGenerator(TestGenerator):
         flow_store=None,
         semantic_contexts: Optional[Dict[str, DocumentationContext]] = None,
         enable_mutation_testing: bool = True,
-        max_mutations_per_pattern: int = 3
+        max_mutations_per_pattern: int = 3,
+        parameter_constraints: Optional[Dict[str, Dict]] = None
     ):
         """
         Initialize Enhanced Test Generator
@@ -52,8 +53,9 @@ class EnhancedTestGenerator(TestGenerator):
             semantic_contexts: Dict of endpoint semantic contexts
             enable_mutation_testing: Enable security mutation testing
             max_mutations_per_pattern: Max mutations per security pattern
+            parameter_constraints: Optional parameter constraints for constraint-aware generation
         """
-        super().__init__(doc_store, flow_store)
+        super().__init__(doc_store, flow_store, parameter_constraints)
 
         self.semantic_generator = SemanticTestGenerator()
         self.semantic_contexts = semantic_contexts or {}

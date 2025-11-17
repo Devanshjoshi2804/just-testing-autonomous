@@ -74,12 +74,17 @@ class TestRunner:
                 self.flow_store,
                 semantic_contexts=semantic_contexts,
                 enable_mutation_testing=True,
-                max_mutations_per_pattern=3
+                max_mutations_per_pattern=3,
+                parameter_constraints=self.parameter_constraints
             )
             mode = "comprehensive" if comprehensive_mode else "semantic"
             logger.info(f"🧠 Using EnhancedTestGenerator ({mode} mode) for {len(semantic_contexts or {})} endpoints")
         else:
-            self.generator = TestGenerator(doc_store, self.flow_store)
+            self.generator = TestGenerator(
+                doc_store,
+                self.flow_store,
+                parameter_constraints=self.parameter_constraints
+            )
             logger.info("Using standard TestGenerator")
 
         # Log constraint availability
