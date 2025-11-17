@@ -14,7 +14,9 @@ class DataGenerationStrategy(str, Enum):
     """Data generation strategies"""
     VALID = "valid"  # Valid data within constraints
     BOUNDARY_MIN = "boundary_min"  # At minimum boundary
+    BOUNDARY_MIN_PLUS_ONE = "boundary_min_plus_one"  # Just above minimum
     BOUNDARY_MAX = "boundary_max"  # At maximum boundary
+    BOUNDARY_MAX_MINUS_ONE = "boundary_max_minus_one"  # Just below maximum
     INVALID_BELOW_MIN = "invalid_below_min"  # Below minimum (for negative tests)
     INVALID_ABOVE_MAX = "invalid_above_max"  # Above maximum (for negative tests)
     INVALID_TYPE = "invalid_type"  # Wrong type
@@ -132,9 +134,17 @@ class ConstraintAwareDataGenerator:
             # Exactly at minimum length
             return self._generate_realistic_string(param_name, min_length)
 
+        elif strategy == DataGenerationStrategy.BOUNDARY_MIN_PLUS_ONE:
+            # Just above minimum length
+            return self._generate_realistic_string(param_name, min_length + 1)
+
         elif strategy == DataGenerationStrategy.BOUNDARY_MAX:
             # Exactly at maximum length
             return self._generate_realistic_string(param_name, max_length)
+
+        elif strategy == DataGenerationStrategy.BOUNDARY_MAX_MINUS_ONE:
+            # Just below maximum length
+            return self._generate_realistic_string(param_name, max(min_length, max_length - 1))
 
         elif strategy == DataGenerationStrategy.INVALID_BELOW_MIN:
             # Below minimum length
@@ -177,18 +187,28 @@ class ConstraintAwareDataGenerator:
             # Exactly at minimum
             return int(min_value) if is_integer else min_value
 
+        elif strategy == DataGenerationStrategy.BOUNDARY_MIN_PLUS_ONE:
+            # Just above minimum
+            value = min_value + (1 if is_integer else 0.1)
+            return int(value) if is_integer else value
+
         elif strategy == DataGenerationStrategy.BOUNDARY_MAX:
             # Exactly at maximum
             return int(max_value) if is_integer else max_value
 
+        elif strategy == DataGenerationStrategy.BOUNDARY_MAX_MINUS_ONE:
+            # Just below maximum
+            value = max_value - (1 if is_integer else 0.1)
+            return int(value) if is_integer else value
+
         elif strategy == DataGenerationStrategy.INVALID_BELOW_MIN:
             # Below minimum
-            value = min_value - 1
+            value = min_value - (1 if is_integer else 0.1)
             return int(value) if is_integer else value
 
         elif strategy == DataGenerationStrategy.INVALID_ABOVE_MAX:
             # Above maximum
-            value = max_value + 1
+            value = max_value + (1 if is_integer else 0.1)
             return int(value) if is_integer else value
 
         elif strategy == DataGenerationStrategy.INVALID_TYPE:
@@ -217,14 +237,53 @@ class ConstraintAwareDataGenerator:
         constraints: Dict[str, Dict],
         strategy: DataGenerationStrategy
     ) -> List:
-        """Generate array value"""
+        """Generate array value with boundary testing support"""
+
+        # Extract min/max items constraints
+        min_items = constraints.get('min_items', {}).get('value', 0)
+        max_items = constraints.get('max_items', {}).get('value', 10)
+
         if strategy == DataGenerationStrategy.EMPTY:
             return []
+
         elif strategy == DataGenerationStrategy.NULL:
             return None
+
+        elif strategy == DataGenerationStrategy.BOUNDARY_MIN:
+            # Exactly min_items elements
+            return [f"item_{i}" for i in range(min_items)]
+
+        elif strategy == DataGenerationStrategy.BOUNDARY_MIN_PLUS_ONE:
+            # Just above minimum
+            return [f"item_{i}" for i in range(min_items + 1)]
+
+        elif strategy == DataGenerationStrategy.BOUNDARY_MAX:
+            # Exactly max_items elements
+            return [f"item_{i}" for i in range(max_items)]
+
+        elif strategy == DataGenerationStrategy.BOUNDARY_MAX_MINUS_ONE:
+            # Just below maximum
+            return [f"item_{i}" for i in range(max(min_items, max_items - 1))]
+
+        elif strategy == DataGenerationStrategy.INVALID_BELOW_MIN:
+            # Below minimum items (if min > 0)
+            if min_items > 0:
+                return [f"item_{i}" for i in range(max(0, min_items - 1))]
+            else:
+                return []
+
+        elif strategy == DataGenerationStrategy.INVALID_ABOVE_MAX:
+            # Above maximum items
+            return [f"item_{i}" for i in range(max_items + 5)]
+
+        elif strategy == DataGenerationStrategy.VALID:
+            # Valid array - middle size
+            size = min(min_items + 2, max_items)
+            return [f"item_{i}" for i in range(size)]
+
         else:
-            # Generate simple array with one element
-            return ["item1"]
+            # Default - single item
+            return ["item_0"]
 
     def _generate_object(
         self,
@@ -325,6 +384,10 @@ class ConstraintAwareDataGenerator:
         """
         Generate comprehensive set of boundary test values
 
+        For numeric params: min-1, min, min+1, max-1, max, max+1 (6-point boundary)
+        For strings: empty, min length, min+1, max-1, max length, too long
+        For arrays: empty, min items, min+1, max-1, max items, too many
+
         Returns list of test cases with:
         - description: What this test case checks
         - value: The generated value
@@ -349,9 +412,19 @@ class ConstraintAwareDataGenerator:
             'strategy': 'valid'
         })
 
-        # For numeric/string types, test boundaries
-        if param_type in ['integer', 'number', 'string']:
-            # Minimum boundary
+        # For numeric/string/array types, test comprehensive boundaries
+        if param_type in ['integer', 'number', 'string', 'array']:
+            # 6-POINT BOUNDARY TESTING
+
+            # Point 1: Below minimum (INVALID - negative test)
+            test_cases.append({
+                'description': 'Below minimum boundary (should fail)',
+                'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.INVALID_BELOW_MIN),
+                'expected_valid': False,
+                'strategy': 'invalid_below_min'
+            })
+
+            # Point 2: At minimum (VALID)
             test_cases.append({
                 'description': 'At minimum boundary',
                 'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.BOUNDARY_MIN),
@@ -359,7 +432,23 @@ class ConstraintAwareDataGenerator:
                 'strategy': 'boundary_min'
             })
 
-            # Maximum boundary
+            # Point 3: Just above minimum (VALID)
+            test_cases.append({
+                'description': 'Just above minimum boundary (min+1)',
+                'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.BOUNDARY_MIN_PLUS_ONE),
+                'expected_valid': True,
+                'strategy': 'boundary_min_plus_one'
+            })
+
+            # Point 4: Just below maximum (VALID)
+            test_cases.append({
+                'description': 'Just below maximum boundary (max-1)',
+                'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.BOUNDARY_MAX_MINUS_ONE),
+                'expected_valid': True,
+                'strategy': 'boundary_max_minus_one'
+            })
+
+            # Point 5: At maximum (VALID)
             test_cases.append({
                 'description': 'At maximum boundary',
                 'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.BOUNDARY_MAX),
@@ -367,20 +456,21 @@ class ConstraintAwareDataGenerator:
                 'strategy': 'boundary_max'
             })
 
-            # Below minimum (negative test)
+            # Point 6: Above maximum (INVALID - negative test)
             test_cases.append({
-                'description': 'Below minimum (should fail)',
-                'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.INVALID_BELOW_MIN),
-                'expected_valid': False,
-                'strategy': 'invalid_below_min'
-            })
-
-            # Above maximum (negative test)
-            test_cases.append({
-                'description': 'Above maximum (should fail)',
+                'description': 'Above maximum boundary (should fail)',
                 'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.INVALID_ABOVE_MAX),
                 'expected_valid': False,
                 'strategy': 'invalid_above_max'
+            })
+
+        # Special case: Empty value testing (for strings and arrays)
+        if param_type in ['string', 'array']:
+            test_cases.append({
+                'description': 'Empty value',
+                'value': self.generate_value(param_name, param_type, constraints, DataGenerationStrategy.EMPTY),
+                'expected_valid': False,  # Usually invalid unless min_length/min_items = 0
+                'strategy': 'empty'
             })
 
         # Check for enum constraint

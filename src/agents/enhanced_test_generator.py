@@ -21,6 +21,7 @@ from src.testing.semantic_test_generator import SemanticTestGenerator
 from src.testing.mutation_test_generator import MutationTestGenerator
 from src.analysis.semantic_doc_analyzer import DocumentationContext
 from src.generators.combinatorial_test_generator import CombinatorialTestGenerator
+from src.generators.boundary_test_generator import BoundaryTestGenerator
 from src.generators.constraint_aware_data_generator import DataGenerationStrategy
 
 
@@ -74,6 +75,10 @@ class EnhancedTestGenerator(TestGenerator):
         # Initialize combinatorial test generator
         self.combinatorial_generator = CombinatorialTestGenerator(max_combinations=50)
         logger.info("🔢 Combinatorial parameter testing enabled")
+
+        # Initialize boundary test generator
+        self.boundary_generator = BoundaryTestGenerator()
+        logger.info("📊 Boundary value testing enabled (6-point boundary)")
 
         logger.info(
             f"EnhancedTestGenerator initialized "
@@ -212,12 +217,30 @@ class EnhancedTestGenerator(TestGenerator):
 
             logger.info(f"  ✅ Generated {combinatorial_count} combinatorial tests")
 
+        # Part 5: Boundary value tests (6-point boundary testing)
+        boundary_count = 0
+        endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+        endpoint_constraints = self.parameter_constraints.get(endpoint_key, {})
+
+        if endpoint_constraints and self.boundary_generator.should_use_boundary_testing(endpoint, endpoint_constraints):
+            logger.info(f"  📊 Generating boundary value tests...")
+
+            boundary_tests = self.boundary_generator.generate_boundary_test_suite(
+                endpoint=endpoint,
+                parameter_constraints=endpoint_constraints
+            )
+
+            all_tests.extend(boundary_tests)
+            boundary_count = len(boundary_tests)
+
+            logger.info(f"  ✅ Generated {boundary_count} boundary tests")
+
         logger.info(f"  ✅ Generated 3 LLM-based tests")
 
         # Summary
         logger.info(
             f"✅ Total tests generated: {len(all_tests)} "
-            f"(LLM: 3, mutation: {mutation_count}, combinatorial: {combinatorial_count})"
+            f"(LLM: 3, mutation: {mutation_count}, combinatorial: {combinatorial_count}, boundary: {boundary_count})"
         )
 
         return all_tests
@@ -338,7 +361,7 @@ JSON payload:
             endpoint: Endpoint dict
 
         Returns:
-            Summary dict with semantic, LLM, and mutation test counts
+            Summary dict with semantic, LLM, mutation, combinatorial, and boundary test counts
         """
         endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
 
@@ -351,9 +374,30 @@ JSON payload:
             mutation_summary = self.mutation_generator.get_mutation_summary(endpoint)
             mutation_count = mutation_summary.get('total_tests', 0)
 
+        # Get combinatorial test summary
+        combinatorial_count = 0
+        if self.combinatorial_generator.should_use_combinatorial_testing(endpoint):
+            combinatorial_summary = self.combinatorial_generator.get_combination_coverage_stats(endpoint)
+            combinatorial_count = combinatorial_summary.get('combinations_to_test', 0)
+
+        # Get boundary test summary
+        boundary_count = 0
+        endpoint_constraints = self.parameter_constraints.get(endpoint_key, {})
+        if endpoint_constraints and self.boundary_generator.should_use_boundary_testing(endpoint, endpoint_constraints):
+            boundary_summary = self.boundary_generator.get_boundary_test_summary(endpoint, endpoint_constraints)
+            boundary_count = boundary_summary.get('estimated_tests', 0)
+
         if semantic_context:
             semantic_summary = self.semantic_generator.explain_test_generation(
                 semantic_context
+            )
+
+            total_tests = (
+                sum(semantic_summary['test_types'].values()) +
+                3 +
+                mutation_count +
+                combinatorial_count +
+                boundary_count
             )
 
             return {
@@ -362,11 +406,15 @@ JSON payload:
                 'semantic_tests': semantic_summary['test_types'],
                 'llm_tests': {'positive': 1, 'negative': 1, 'boundary': 1},
                 'mutation_tests': mutation_summary.get('by_severity', {}),
-                'total_estimated_tests': sum(semantic_summary['test_types'].values()) + 3 + mutation_count,
+                'combinatorial_tests': combinatorial_count,
+                'boundary_tests': boundary_count,
+                'total_estimated_tests': total_tests,
                 'sources': {
                     **semantic_summary['sources_used'],
                     'llm_generated': 3,
-                    'mutation_testing': mutation_count
+                    'mutation_testing': mutation_count,
+                    'combinatorial_testing': combinatorial_count,
+                    'boundary_testing': boundary_count
                 },
                 'security_coverage': {
                     'total_security_tests': mutation_count,
@@ -379,16 +427,22 @@ JSON payload:
                 )
             }
         else:
+            total_tests = 3 + mutation_count + combinatorial_count + boundary_count
+
             return {
                 'endpoint': endpoint_key,
                 'has_semantic_context': False,
                 'semantic_tests': {},
                 'llm_tests': {'positive': 1, 'negative': 1, 'boundary': 1},
                 'mutation_tests': mutation_summary.get('by_severity', {}),
-                'total_estimated_tests': 3 + mutation_count,
+                'combinatorial_tests': combinatorial_count,
+                'boundary_tests': boundary_count,
+                'total_estimated_tests': total_tests,
                 'sources': {
                     'llm_generated': 3,
-                    'mutation_testing': mutation_count
+                    'mutation_testing': mutation_count,
+                    'combinatorial_testing': combinatorial_count,
+                    'boundary_testing': boundary_count
                 },
                 'security_coverage': {
                     'total_security_tests': mutation_count,
