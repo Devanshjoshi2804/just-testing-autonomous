@@ -22,6 +22,7 @@ from src.testing.mutation_test_generator import MutationTestGenerator
 from src.analysis.semantic_doc_analyzer import DocumentationContext
 from src.generators.combinatorial_test_generator import CombinatorialTestGenerator
 from src.generators.boundary_test_generator import BoundaryTestGenerator
+from src.generators.negative_test_generator import NegativeTestGenerator
 from src.generators.constraint_aware_data_generator import DataGenerationStrategy
 
 
@@ -79,6 +80,10 @@ class EnhancedTestGenerator(TestGenerator):
         # Initialize boundary test generator
         self.boundary_generator = BoundaryTestGenerator()
         logger.info("📊 Boundary value testing enabled (6-point boundary)")
+
+        # Initialize negative test generator
+        self.negative_generator = NegativeTestGenerator()
+        logger.info("⛔ Negative testing enabled (invalid inputs, missing fields, etc.)")
 
         logger.info(
             f"EnhancedTestGenerator initialized "
@@ -235,12 +240,28 @@ class EnhancedTestGenerator(TestGenerator):
 
             logger.info(f"  ✅ Generated {boundary_count} boundary tests")
 
+        # Part 6: Negative tests (invalid inputs, missing fields, etc.)
+        negative_count = 0
+        if endpoint_constraints and self.negative_generator.should_use_negative_testing(endpoint, endpoint_constraints):
+            logger.info(f"  ⛔ Generating negative test cases...")
+
+            negative_tests = self.negative_generator.generate_negative_test_suite(
+                endpoint=endpoint,
+                parameter_constraints=endpoint_constraints
+            )
+
+            all_tests.extend(negative_tests)
+            negative_count = len(negative_tests)
+
+            logger.info(f"  ✅ Generated {negative_count} negative tests")
+
         logger.info(f"  ✅ Generated 3 LLM-based tests")
 
         # Summary
         logger.info(
             f"✅ Total tests generated: {len(all_tests)} "
-            f"(LLM: 3, mutation: {mutation_count}, combinatorial: {combinatorial_count}, boundary: {boundary_count})"
+            f"(LLM: 3, mutation: {mutation_count}, combinatorial: {combinatorial_count}, "
+            f"boundary: {boundary_count}, negative: {negative_count})"
         )
 
         return all_tests
@@ -387,6 +408,12 @@ JSON payload:
             boundary_summary = self.boundary_generator.get_boundary_test_summary(endpoint, endpoint_constraints)
             boundary_count = boundary_summary.get('estimated_tests', 0)
 
+        # Get negative test summary
+        negative_count = 0
+        if endpoint_constraints and self.negative_generator.should_use_negative_testing(endpoint, endpoint_constraints):
+            negative_summary = self.negative_generator.get_negative_test_summary(endpoint, endpoint_constraints)
+            negative_count = negative_summary.get('estimated_tests', 0)
+
         if semantic_context:
             semantic_summary = self.semantic_generator.explain_test_generation(
                 semantic_context
@@ -397,7 +424,8 @@ JSON payload:
                 3 +
                 mutation_count +
                 combinatorial_count +
-                boundary_count
+                boundary_count +
+                negative_count
             )
 
             return {
@@ -408,13 +436,15 @@ JSON payload:
                 'mutation_tests': mutation_summary.get('by_severity', {}),
                 'combinatorial_tests': combinatorial_count,
                 'boundary_tests': boundary_count,
+                'negative_tests': negative_count,
                 'total_estimated_tests': total_tests,
                 'sources': {
                     **semantic_summary['sources_used'],
                     'llm_generated': 3,
                     'mutation_testing': mutation_count,
                     'combinatorial_testing': combinatorial_count,
-                    'boundary_testing': boundary_count
+                    'boundary_testing': boundary_count,
+                    'negative_testing': negative_count
                 },
                 'security_coverage': {
                     'total_security_tests': mutation_count,
@@ -427,7 +457,7 @@ JSON payload:
                 )
             }
         else:
-            total_tests = 3 + mutation_count + combinatorial_count + boundary_count
+            total_tests = 3 + mutation_count + combinatorial_count + boundary_count + negative_count
 
             return {
                 'endpoint': endpoint_key,
@@ -437,12 +467,14 @@ JSON payload:
                 'mutation_tests': mutation_summary.get('by_severity', {}),
                 'combinatorial_tests': combinatorial_count,
                 'boundary_tests': boundary_count,
+                'negative_tests': negative_count,
                 'total_estimated_tests': total_tests,
                 'sources': {
                     'llm_generated': 3,
                     'mutation_testing': mutation_count,
                     'combinatorial_testing': combinatorial_count,
-                    'boundary_testing': boundary_count
+                    'boundary_testing': boundary_count,
+                    'negative_testing': negative_count
                 },
                 'security_coverage': {
                     'total_security_tests': mutation_count,

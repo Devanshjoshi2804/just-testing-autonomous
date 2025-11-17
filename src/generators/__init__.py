@@ -13,10 +13,14 @@ from src.generators.combinatorial_test_generator import (
 from src.generators.boundary_test_generator import (
     BoundaryTestGenerator
 )
+from src.generators.negative_test_generator import (
+    NegativeTestGenerator
+)
 
 __all__ = [
     "ConstraintAwareDataGenerator",
     "DataGenerationStrategy",
     "CombinatorialTestGenerator",
     "BoundaryTestGenerator",
+    "NegativeTestGenerator",
 ]
