@@ -20,6 +20,8 @@ from src.agents.test_generator import TestGenerator
 from src.testing.semantic_test_generator import SemanticTestGenerator
 from src.testing.mutation_test_generator import MutationTestGenerator
 from src.analysis.semantic_doc_analyzer import DocumentationContext
+from src.generators.combinatorial_test_generator import CombinatorialTestGenerator
+from src.generators.constraint_aware_data_generator import DataGenerationStrategy
 
 
 class EnhancedTestGenerator(TestGenerator):
@@ -68,6 +70,10 @@ class EnhancedTestGenerator(TestGenerator):
             logger.info("🛡️ Security mutation testing enabled")
         else:
             self.mutation_generator = None
+
+        # Initialize combinatorial test generator
+        self.combinatorial_generator = CombinatorialTestGenerator(max_combinations=50)
+        logger.info("🔢 Combinatorial parameter testing enabled")
 
         logger.info(
             f"EnhancedTestGenerator initialized "
@@ -157,6 +163,7 @@ class EnhancedTestGenerator(TestGenerator):
         })
 
         # Part 3: Security mutation tests
+        mutation_count = 0
         if self.enable_mutation_testing and self.mutation_generator:
             logger.info(f"  🛡️ Generating security mutation tests...")
 
@@ -167,15 +174,50 @@ class EnhancedTestGenerator(TestGenerator):
             )
 
             all_tests.extend(mutation_tests)
+            mutation_count = len(mutation_tests)
 
-            logger.info(f"  ✅ Generated {len(mutation_tests)} security mutation tests")
+            logger.info(f"  ✅ Generated {mutation_count} security mutation tests")
+
+        # Part 4: Combinatorial parameter tests
+        combinatorial_count = 0
+        if self.combinatorial_generator.should_use_combinatorial_testing(endpoint):
+            logger.info(f"  🔢 Generating combinatorial parameter tests...")
+
+            # Get endpoint key for constraints
+            endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+
+            # Define payload generator function for combinatorial testing
+            def payload_gen_func(modified_endpoint, param_constraints):
+                # Use constraint-aware generation if constraints available
+                if endpoint_key in self.parameter_constraints:
+                    endpoint_constraints = self.parameter_constraints[endpoint_key]
+                    return self.constraint_generator.generate_payload_with_constraints(
+                        endpoint=modified_endpoint,
+                        parameter_constraints=endpoint_constraints,
+                        strategy=DataGenerationStrategy.VALID
+                    )
+                else:
+                    # Fall back to LLM generation
+                    return self.generate_test_payload(modified_endpoint, test_type="positive")
+
+            # Generate combinatorial test suite
+            combinatorial_tests = self.combinatorial_generator.generate_combinatorial_test_suite(
+                endpoint=endpoint,
+                base_payload_generator=payload_gen_func,
+                parameter_constraints=self.parameter_constraints.get(endpoint_key, {})
+            )
+
+            all_tests.extend(combinatorial_tests)
+            combinatorial_count = len(combinatorial_tests)
+
+            logger.info(f"  ✅ Generated {combinatorial_count} combinatorial tests")
 
         logger.info(f"  ✅ Generated 3 LLM-based tests")
 
         # Summary
         logger.info(
             f"✅ Total tests generated: {len(all_tests)} "
-            f"(semantic: {len(all_tests) - 3}, LLM: 3)"
+            f"(LLM: 3, mutation: {mutation_count}, combinatorial: {combinatorial_count})"
         )
 
         return all_tests
