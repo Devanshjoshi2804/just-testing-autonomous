@@ -63,7 +63,7 @@ class DocumentStore:
 
     def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Generate embeddings using Mistral
+        Generate embeddings using sentence-transformers (local)
 
         Args:
             texts: List of text strings
@@ -72,13 +72,16 @@ class DocumentStore:
             List of embedding vectors
         """
         try:
-            response = self.mistral_client.embeddings.create(
-                model=self.embedding_model,
-                inputs=texts
-            )
-
-            embeddings = [item.embedding for item in response.data]
-            logger.debug(f"Generated {len(embeddings)} embeddings")
+            # Use sentence-transformers for local embeddings
+            from sentence_transformers import SentenceTransformer
+            
+            # Load model (cached after first use)
+            if not hasattr(self, '_embedding_model_loaded'):
+                self._local_model = SentenceTransformer('all-MiniLM-L6-v2')
+                self._embedding_model_loaded = True
+            
+            embeddings = self._local_model.encode(texts, convert_to_numpy=True).tolist()
+            logger.debug(f"Generated {len(embeddings)} embeddings using local model")
 
             return embeddings
 

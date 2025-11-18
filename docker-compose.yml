@@ -20,6 +20,8 @@ services:
       - ./uploads:/app/uploads
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LLM_MODEL=${LLM_MODEL:-llama3.2:3b}
+      - FAST_LLM_MODEL=${FAST_LLM_MODEL:-llama3.2:3b}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
