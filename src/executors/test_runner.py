@@ -21,6 +21,9 @@ from src.rl.test_optimizer import TestOptimizer
 from src.analysis.change_detector import ChangeDetector
 from src.testing.test_healer import TestHealer
 from src.workflow.data_flow_tracker import DataFlowTracker
+from src.workflow.dependency_graph import DependencyGraph
+from src.workflow.state_transition_generator import StateTransitionGenerator
+from src.workflow.state_machine_validator import StateMachineValidator
 
 
 class TestRunner:
@@ -778,6 +781,159 @@ class TestRunner:
         self._print_summary()
 
         return self.results
+
+    async def test_state_transitions(
+        self,
+        endpoints: List[Dict[str, Any]],
+        headers: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Test state transitions (CREATE → READ → UPDATE → DELETE workflows)
+
+        Args:
+            endpoints: List of endpoint dicts
+            headers: Optional custom headers
+
+        Returns:
+            State transition test results
+        """
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"🔄 STATE TRANSITION TESTING")
+        logger.info(f"{'=' * 80}")
+
+        # Step 1: Build dependency graph
+        logger.info("📊 Building dependency graph...")
+        dep_graph = DependencyGraph()
+        dep_graph.build_graph(endpoints)
+
+        graph_summary = dep_graph.get_graph_summary()
+        logger.info(f"   Resources: {graph_summary['total_resources']}")
+        logger.info(f"   Dependencies: {graph_summary['total_dependencies']}")
+        logger.info(f"   CRUD Resources: {graph_summary['crud_resource_count']}")
+
+        # Step 2: Generate state transition sequences
+        logger.info("\n🔄 Generating state transition test sequences...")
+        sequence_generator = StateTransitionGenerator(dep_graph)
+        sequences = sequence_generator.generate_all_sequences()
+
+        sequence_summary = sequence_generator.get_summary()
+        logger.info(f"   Total sequences: {sequence_summary['total_sequences']}")
+        logger.info(f"   Total transitions: {sequence_summary['total_transitions']}")
+        logger.info(f"   Sequences by type:")
+        for seq_type, count in sequence_summary['sequences_by_type'].items():
+            logger.info(f"      {seq_type}: {count}")
+
+        # Step 3: Execute state transition sequences
+        logger.info("\n🧪 Executing state transition sequences...")
+        validator = StateMachineValidator(
+            base_url=self.base_url,
+            headers=headers or {},
+            timeout=settings.HTTP_TIMEOUT_SECONDS
+        )
+
+        sequence_results = await validator.validate_multiple_sequences(
+            sequences,
+            test_data_generator=self.generator
+        )
+
+        # Step 4: Generate validation report
+        validation_report = validator.get_validation_report(sequence_results)
+
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"STATE TRANSITION TESTING COMPLETE")
+        logger.info(f"{'=' * 80}")
+        logger.info(f"Total Sequences: {validation_report['summary']['total_sequences']}")
+        logger.info(f"Successful: {validation_report['summary']['successful_sequences']} ✅")
+        logger.info(f"Failed: {validation_report['summary']['failed_sequences']} ❌")
+        logger.info(f"Success Rate: {validation_report['summary']['success_rate']:.1f}%")
+        logger.info(f"Avg Time: {validation_report['summary']['avg_sequence_time_ms']:.0f}ms")
+
+        if validation_report['failed_sequences']:
+            logger.warning(f"\nFailed Sequences:")
+            for failed in validation_report['failed_sequences']:
+                logger.warning(f"  - {failed['description']}: {failed['failure_reason']}")
+
+        return {
+            'dependency_graph': graph_summary,
+            'sequence_summary': sequence_summary,
+            'validation_report': validation_report,
+            'sequence_results': sequence_results
+        }
+
+    async def test_all_with_state_transitions(
+        self,
+        endpoints: List[Dict[str, Any]],
+        headers: Optional[Dict[str, str]] = None,
+        run_state_transitions: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Run complete test suite including individual endpoint tests + state transitions
+
+        Args:
+            endpoints: List of endpoint dicts
+            headers: Optional custom headers
+            run_state_transitions: Include state transition testing (default True)
+
+        Returns:
+            Combined test results
+        """
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"🚀 COMPREHENSIVE TEST SUITE")
+        logger.info(f"{'=' * 80}")
+        logger.info(f"Endpoints: {len(endpoints)}")
+        logger.info(f"Comprehensive Mode: {self.comprehensive_mode}")
+        logger.info(f"State Transitions: {run_state_transitions}")
+        logger.info(f"RL Enabled: {self.use_rl}")
+        logger.info(f"{'=' * 80}\n")
+
+        # Phase 1: Individual endpoint testing
+        logger.info("📍 Phase 1: Individual Endpoint Testing")
+        endpoint_results = await self.test_all_endpoints(endpoints, ordered=True)
+
+        # Phase 2: State transition testing
+        state_transition_results = None
+        if run_state_transitions:
+            logger.info("\n📍 Phase 2: State Transition Testing")
+            state_transition_results = await self.test_state_transitions(
+                endpoints,
+                headers=headers
+            )
+
+        # Combined summary
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"🎉 COMPREHENSIVE TEST SUITE COMPLETE")
+        logger.info(f"{'=' * 80}")
+
+        total_endpoint_tests = len(endpoint_results)
+        passed_endpoint_tests = sum(1 for r in endpoint_results if r.get('success'))
+
+        logger.info(f"Endpoint Tests:")
+        logger.info(f"   Total: {total_endpoint_tests}")
+        logger.info(f"   Passed: {passed_endpoint_tests}")
+        logger.info(f"   Failed: {total_endpoint_tests - passed_endpoint_tests}")
+
+        if state_transition_results:
+            st_summary = state_transition_results['validation_report']['summary']
+            logger.info(f"\nState Transition Tests:")
+            logger.info(f"   Total Sequences: {st_summary['total_sequences']}")
+            logger.info(f"   Passed: {st_summary['successful_sequences']}")
+            logger.info(f"   Failed: {st_summary['failed_sequences']}")
+            logger.info(f"   Total Transitions: {st_summary['total_transitions']}")
+
+        logger.info(f"{'=' * 80}\n")
+
+        return {
+            'endpoint_results': endpoint_results,
+            'state_transition_results': state_transition_results,
+            'summary': {
+                'total_endpoint_tests': total_endpoint_tests,
+                'passed_endpoint_tests': passed_endpoint_tests,
+                'failed_endpoint_tests': total_endpoint_tests - passed_endpoint_tests,
+                'endpoint_success_rate': (passed_endpoint_tests / total_endpoint_tests * 100) if total_endpoint_tests > 0 else 0,
+                'state_transition_enabled': run_state_transitions,
+                'state_transition_summary': state_transition_results['validation_report']['summary'] if state_transition_results else None
+            }
+        }
 
     async def _probe_endpoint(self, endpoint: Dict[str, Any]) -> Dict[str, Any]:
         """
