@@ -34,12 +34,18 @@ class RealAPITester:
     """Test AutoTest-RL with real API documentation"""
 
     def __init__(self):
-        self.docs_dir = Path("docs/api-specs")
+        # Multiple document source directories
+        self.doc_dirs = [
+            Path("docs/api-specs"),
+            Path("uploads"),
+            Path("data/api-docs")
+        ]
         self.results_dir = Path("data/test-results")
         self.parsed_dir = Path("data/parsed-docs")
 
-        # Create directories
-        self.docs_dir.mkdir(parents=True, exist_ok=True)
+        # Create all directories
+        for doc_dir in self.doc_dirs:
+            doc_dir.mkdir(parents=True, exist_ok=True)
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -60,30 +66,50 @@ class RealAPITester:
         }
 
     def discover_documents(self) -> List[Path]:
-        """Discover all API documentation files"""
+        """Discover all API documentation files from all source directories"""
         logger.info("Discovering API documentation...")
 
-        docs = []
+        all_docs = []
+        all_pdfs = []
+        all_jsons = []
+        all_yamls = []
 
-        # Find PDFs
-        pdf_files = list(self.docs_dir.glob("**/*.pdf"))
-        docs.extend(pdf_files)
+        # Search all configured directories
+        for doc_dir in self.doc_dirs:
+            logger.info(f"Searching in: {doc_dir}/")
 
-        # Find JSON (OpenAPI specs)
-        json_files = list(self.docs_dir.glob("**/*.json"))
-        docs.extend(json_files)
+            # Find PDFs
+            pdf_files = list(doc_dir.glob("**/*.pdf"))
+            all_pdfs.extend(pdf_files)
+            all_docs.extend(pdf_files)
 
-        # Find YAML (OpenAPI specs)
-        yaml_files = list(self.docs_dir.glob("**/*.yaml"))
-        yaml_files.extend(list(self.docs_dir.glob("**/*.yml")))
-        docs.extend(yaml_files)
+            # Find JSON (OpenAPI specs)
+            json_files = list(doc_dir.glob("**/*.json"))
+            all_jsons.extend(json_files)
+            all_docs.extend(json_files)
 
-        logger.info(f"Found {len(docs)} documentation files:")
-        logger.info(f"  - {len(pdf_files)} PDF files")
-        logger.info(f"  - {len(json_files)} JSON files")
-        logger.info(f"  - {len(yaml_files)} YAML files")
+            # Find YAML (OpenAPI specs)
+            yaml_files = list(doc_dir.glob("**/*.yaml"))
+            yaml_files.extend(list(doc_dir.glob("**/*.yml")))
+            all_yamls.extend(yaml_files)
+            all_docs.extend(yaml_files)
 
-        return docs
+        logger.info(f"\nFound {len(all_docs)} documentation files:")
+        logger.info(f"  - {len(all_pdfs)} PDF files")
+        logger.info(f"  - {len(all_jsons)} JSON files")
+        logger.info(f"  - {len(all_yamls)} YAML files")
+
+        if all_docs:
+            logger.info("\nFiles discovered:")
+            for doc in all_docs:
+                logger.info(f"  📄 {doc}")
+        else:
+            logger.warning("\n⚠️  No API documentation found!")
+            logger.warning("Please add your API docs to one of these directories:")
+            for doc_dir in self.doc_dirs:
+                logger.warning(f"  - {doc_dir}/")
+
+        return all_docs
 
     async def test_document_parsing(self, doc_path: Path) -> Dict[str, Any]:
         """Test document parsing pipeline"""
