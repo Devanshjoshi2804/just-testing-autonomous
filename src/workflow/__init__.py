@@ -1,6 +1,6 @@
 """
 Workflow Module
-Workflow intelligence, dependency graphs, and state transition testing
+Workflow intelligence, dependency graphs, state transition testing, and orchestration
 """
 
 from src.workflow.dependency_graph import (
@@ -17,6 +17,12 @@ from src.workflow.state_transition_tester import (
     StateTransition,
     WorkflowSequence
 )
+from src.workflow.workflow_orchestrator import (
+    WorkflowOrchestrator,
+    WorkflowPhase,
+    WorkflowResult,
+    WorkflowStep
+)
 
 __all__ = [
     "DependencyGraph",
@@ -27,4 +33,8 @@ __all__ = [
     "StateTransitionTester",
     "StateTransition",
     "WorkflowSequence",
+    "WorkflowOrchestrator",
+    "WorkflowPhase",
+    "WorkflowResult",
+    "WorkflowStep",
 ]
