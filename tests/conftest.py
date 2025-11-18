@@ -1,20 +1,25 @@
 """
 Pytest Configuration and Shared Fixtures
-Phase 9: Critical Infrastructure & Production Readiness
+Unified configuration from Phases 6-10
 """
 
 import pytest
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, MagicMock
-from typing import Generator, AsyncGenerator
+from typing import Generator, AsyncGenerator, Dict, Any
+
+# Import settings for tests
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
 # Import application components
-from src.config import settings
+from src.config import settings, Settings
 from src.api.main import app as main_app
 from src.api.middleware.authentication import APIKeyManager, api_key_manager
 
@@ -29,6 +34,11 @@ def pytest_configure(config):
     settings.ENVIRONMENT = "testing"
     settings.DEBUG = True
     settings.REQUIRE_AUTH = False  # Disable auth for most tests
+
+    # Add custom markers
+    config.addinivalue_line("markers", "unit: Unit tests")
+    config.addinivalue_line("markers", "integration: Integration tests")
+    config.addinivalue_line("markers", "slow: Slow running tests")
 
 
 # ============================================================================
@@ -45,6 +55,42 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
+
+
+# ============================================================================
+# Settings Fixtures
+# ============================================================================
+
+@pytest.fixture
+def test_settings():
+    """Test settings with safe defaults"""
+    return Settings(
+        ENVIRONMENT="test",
+        DEBUG=True,
+        OLLAMA_BASE_URL="http://localhost:11434",
+        CHROMA_HOST="localhost",
+        CHROMA_PORT=8001,
+        REDIS_HOST="localhost",
+        REDIS_PORT=6379,
+    )
+
+
+@pytest.fixture
+def mock_settings():
+    """Mock settings for isolated tests"""
+    mock_settings = Mock(spec=Settings)
+    mock_settings.ENVIRONMENT = "test"
+    mock_settings.DEBUG = True
+    mock_settings.LLM_PROVIDER = "ollama"
+    mock_settings.LLM_MODEL = "llama3.2:3b"
+    mock_settings.FAST_LLM_PROVIDER = "ollama"
+    mock_settings.FAST_LLM_MODEL = "llama3.2:3b"
+    mock_settings.OLLAMA_BASE_URL = "http://localhost:11434"
+    mock_settings.CHROMA_HOST = "localhost"
+    mock_settings.CHROMA_PORT = 8001
+    mock_settings.REDIS_HOST = "localhost"
+    mock_settings.REDIS_PORT = 6379
+    return mock_settings
 
 
 # ============================================================================
@@ -132,14 +178,17 @@ def authenticated_client(client: TestClient, test_api_key: str) -> TestClient:
 
 
 # ============================================================================
-# Mock Fixtures
+# Mock Service Fixtures
 # ============================================================================
 
 @pytest.fixture
 def mock_llm_client():
     """Mock LLM client for testing without actual API calls"""
-    mock = Mock()
-    mock.generate = Mock(return_value="Mocked LLM response")
+    mock = AsyncMock()
+    mock.generate = AsyncMock(return_value={
+        "response": "Mocked LLM response",
+        "model": "llama3.2:3b"
+    })
     mock.embed = Mock(return_value=[0.1] * 768)
     return mock
 
@@ -148,12 +197,16 @@ def mock_llm_client():
 def mock_chromadb():
     """Mock ChromaDB client"""
     mock = MagicMock()
-    mock.add.return_value = None
-    mock.query.return_value = {
+    collection = Mock()
+    collection.add = Mock(return_value=None)
+    collection.query = Mock(return_value={
         "documents": [["test document"]],
         "metadatas": [[{"source": "test"}]],
         "distances": [[0.5]]
-    }
+    })
+    mock.get_or_create_collection = Mock(return_value=collection)
+    mock.add = collection.add
+    mock.query = collection.query
     return mock
 
 
@@ -165,6 +218,7 @@ def mock_redis():
     mock.set = Mock(return_value=True)
     mock.delete = Mock(return_value=True)
     mock.exists = Mock(return_value=False)
+    mock.ping = Mock(return_value=True)
     return mock
 
 
@@ -175,8 +229,7 @@ def mock_redis():
 @pytest.fixture
 def sample_openapi_json(tmp_path: Path) -> Path:
     """Create a sample OpenAPI JSON file"""
-    content = """
-    {
+    content = {
         "openapi": "3.0.0",
         "info": {
             "title": "Test API",
@@ -193,9 +246,8 @@ def sample_openapi_json(tmp_path: Path) -> Path:
             }
         }
     }
-    """
     file_path = tmp_path / "test_api.json"
-    file_path.write_text(content)
+    file_path.write_text(json.dumps(content, indent=2))
     return file_path
 
 
@@ -207,13 +259,70 @@ def sample_pdf_path(tmp_path: Path) -> Path:
     return file_path
 
 
+@pytest.fixture
+def temp_pdf_file(tmp_path):
+    """Create a temporary PDF file for testing"""
+    pdf_path = tmp_path / "test_api.pdf"
+    # Create a minimal PDF (not a real PDF, just for path testing)
+    pdf_path.write_text("Mock PDF content")
+    return pdf_path
+
+
+@pytest.fixture
+def temp_json_file(tmp_path):
+    """Create a temporary JSON file for testing"""
+    json_path = tmp_path / "test_api.json"
+    data = {"test": "data", "endpoints": []}
+    json_path.write_text(json.dumps(data, indent=2))
+    return json_path
+
+
+@pytest.fixture
+def temp_yaml_file(tmp_path):
+    """Create a temporary YAML file for testing"""
+    yaml_path = tmp_path / "test_api.yaml"
+    yaml_path.write_text("openapi: 3.0.0\ninfo:\n  title: Test\n  version: 1.0.0")
+    return yaml_path
+
+
 # ============================================================================
 # Data Fixtures
 # ============================================================================
 
 @pytest.fixture
-def sample_endpoint_data() -> dict:
+def sample_endpoint():
     """Sample endpoint data for testing"""
+    return {
+        "path": "/api/users",
+        "method": "GET",
+        "description": "Retrieve list of users",
+        "parameters": {
+            "page": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 1,
+                "in": "query"
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "default": 10,
+                "in": "query"
+            }
+        },
+        "responses": {
+            "200": {"description": "Success"},
+            "400": {"description": "Bad Request"},
+            "401": {"description": "Unauthorized"}
+        }
+    }
+
+
+@pytest.fixture
+def sample_endpoint_data() -> dict:
+    """Sample endpoint data for testing (Phase 9 format)"""
     return {
         "path": "/api/v1/users",
         "method": "GET",
@@ -231,6 +340,129 @@ def sample_endpoint_data() -> dict:
 
 
 @pytest.fixture
+def sample_endpoint_with_body():
+    """Sample POST endpoint with request body"""
+    return {
+        "path": "/api/users",
+        "method": "POST",
+        "description": "Create a new user",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["email", "name"],
+                        "properties": {
+                            "email": {
+                                "type": "string",
+                                "format": "email",
+                                "minLength": 5,
+                                "maxLength": 100
+                            },
+                            "name": {
+                                "type": "string",
+                                "minLength": 2,
+                                "maxLength": 50
+                            },
+                            "age": {
+                                "type": "integer",
+                                "minimum": 18,
+                                "maximum": 120
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "201": {"description": "Created"},
+            "400": {"description": "Bad Request"},
+            "422": {"description": "Validation Error"}
+        }
+    }
+
+
+@pytest.fixture
+def sample_constraints():
+    """Sample constraints for testing"""
+    return {
+        "email": {
+            "type": "string",
+            "format": "email",
+            "minLength": 5,
+            "maxLength": 100,
+            "required": True
+        },
+        "age": {
+            "type": "integer",
+            "minimum": 18,
+            "maximum": 120,
+            "required": False
+        },
+        "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 50,
+            "pattern": "^[a-zA-Z ]+$",
+            "required": True
+        }
+    }
+
+
+@pytest.fixture
+def sample_openapi_spec():
+    """Sample OpenAPI specification"""
+    return {
+        "openapi": "3.0.0",
+        "info": {
+            "title": "Test API",
+            "version": "1.0.0"
+        },
+        "paths": {
+            "/api/users": {
+                "get": {
+                    "summary": "List users",
+                    "parameters": [
+                        {
+                            "name": "page",
+                            "in": "query",
+                            "schema": {"type": "integer", "minimum": 1}
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Success",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "array",
+                                        "items": {"$ref": "#/components/schemas/User"}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "User": {
+                    "type": "object",
+                    "required": ["id", "email"],
+                    "properties": {
+                        "id": {"type": "string", "format": "uuid"},
+                        "email": {"type": "string", "format": "email"},
+                        "name": {"type": "string"}
+                    }
+                }
+            }
+        }
+    }
+
+
+@pytest.fixture
 def sample_test_result() -> dict:
     """Sample test result data"""
     return {
@@ -240,7 +472,14 @@ def sample_test_result() -> dict:
         "success": True,
         "attempts": 1,
         "elapsed_time": 0.123,
-        "response": {"users": []}
+        "response_time": 0.123,
+        "request": {
+            "params": {"page": 1, "limit": 10}
+        },
+        "response": {
+            "status": 200,
+            "body": {"users": [], "total": 0}
+        }
     }
 
 

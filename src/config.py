@@ -215,6 +215,16 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+def get_settings() -> Settings:
+    """
+    Get the global settings instance
+
+    Returns:
+        Settings instance
+    """
+    return settings
+
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
