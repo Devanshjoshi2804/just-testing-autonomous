@@ -6,9 +6,17 @@ Tests the entire AutoTest-RL pipeline with real API documentation
 import asyncio
 import sys
 import json
+import yaml
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List
+
+# Import real components
+from src.parsers.document_parser_enhanced import DocumentParserEnhanced
+from src.extraction.constraint_extractor import ConstraintExtractor
+from src.generation.enhanced_test_generator import EnhancedTestGenerator
+from src.rag.rag_pipeline import RAGPipeline
+from src.config.settings import Settings
 
 try:
     from loguru import logger
@@ -34,6 +42,16 @@ class RealAPITester:
         self.docs_dir.mkdir(parents=True, exist_ok=True)
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.parsed_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize real components
+        self.settings = Settings()
+        self.rag_pipeline = RAGPipeline(settings=self.settings)
+        self.document_parser = DocumentParserEnhanced(
+            rag_pipeline=self.rag_pipeline,
+            settings=self.settings
+        )
+        self.constraint_extractor = ConstraintExtractor(settings=self.settings)
+        self.test_generator = EnhancedTestGenerator(settings=self.settings)
 
         self.results = {
             'timestamp': datetime.now().isoformat(),
@@ -125,61 +143,101 @@ class RealAPITester:
         return result
 
     async def _parse_document(self, doc_path: Path) -> Dict[str, Any]:
-        """Parse document (mock for now)"""
-        # This would use the actual document parser
-        # For now, return mock data to test the flow
+        """Parse document using real DocumentParserEnhanced"""
+        try:
+            if doc_path.suffix == '.pdf':
+                # Parse PDF using real parser
+                parsed = await self.document_parser.parse_pdf(str(doc_path))
 
-        if doc_path.suffix == '.pdf':
-            # PDF parsing
-            return {
-                'type': 'pdf',
-                'endpoint_count': 10,
-                'pages': 50,
-                'endpoints': [
-                    {
-                        'path': '/api/users',
-                        'method': 'GET',
-                        'description': 'List all users'
-                    },
-                    {
-                        'path': '/api/users',
-                        'method': 'POST',
-                        'description': 'Create a user'
-                    }
-                ],
-                'raw_text': 'Mock API documentation content...'
-            }
-        elif doc_path.suffix in ['.json', '.yaml', '.yml']:
-            # OpenAPI spec
-            return {
-                'type': 'openapi',
-                'endpoint_count': 15,
-                'endpoints': []
-            }
-        else:
-            raise ValueError(f"Unsupported file type: {doc_path.suffix}")
+                # Count endpoints
+                endpoint_count = len(parsed.get('endpoints', []))
+
+                return {
+                    'type': 'pdf',
+                    'endpoint_count': endpoint_count,
+                    'pages': parsed.get('metadata', {}).get('pages', 0),
+                    'endpoints': parsed.get('endpoints', []),
+                    'raw_text': parsed.get('text', ''),
+                    'parsed_data': parsed
+                }
+
+            elif doc_path.suffix in ['.json', '.yaml', '.yml']:
+                # Parse OpenAPI spec
+                with open(doc_path, 'r') as f:
+                    if doc_path.suffix == '.json':
+                        spec = json.load(f)
+                    else:
+                        import yaml
+                        spec = yaml.safe_load(f)
+
+                parsed = await self.document_parser.parse_openapi(spec)
+                endpoint_count = len(parsed.get('endpoints', []))
+
+                return {
+                    'type': 'openapi',
+                    'endpoint_count': endpoint_count,
+                    'endpoints': parsed.get('endpoints', []),
+                    'parsed_data': parsed
+                }
+            else:
+                raise ValueError(f"Unsupported file type: {doc_path.suffix}")
+
+        except Exception as e:
+            logger.error(f"Error parsing {doc_path}: {str(e)}")
+            raise
 
     async def _extract_constraints(self, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract constraints (mock for now)"""
-        # This would use the actual constraint extractor
-        return {
-            'email': {'type': 'string', 'format': 'email'},
-            'age': {'type': 'integer', 'min': 0, 'max': 150}
-        }
+        """Extract constraints using real ConstraintExtractor"""
+        try:
+            # Extract from all endpoints
+            all_constraints = {}
+            endpoints = parsed_data.get('endpoints', [])
+
+            for endpoint in endpoints:
+                # Extract constraints for this endpoint
+                constraints = await self.constraint_extractor.extract_constraints(
+                    endpoint_data=endpoint,
+                    raw_text=parsed_data.get('raw_text', '')
+                )
+
+                # Merge constraints
+                endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+                all_constraints[endpoint_key] = constraints
+
+            return all_constraints
+
+        except Exception as e:
+            logger.error(f"Error extracting constraints: {str(e)}")
+            return {}
 
     async def _generate_tests(self, parsed_data: Dict[str, Any], constraints: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate tests (mock for now)"""
-        # This would use the actual test generator
-        endpoint_count = parsed_data.get('endpoint_count', 0)
-        return [
-            {
-                'endpoint': '/api/users',
-                'method': 'GET',
-                'type': 'positive',
-                'test_case': 'List users successfully'
-            }
-            for i in range(endpoint_count * 5)  # 5 tests per endpoint
-        ]
+        """Generate tests using real EnhancedTestGenerator"""
+        try:
+            all_tests = []
+            endpoints = parsed_data.get('endpoints', [])
+
+            for endpoint in endpoints:
+                endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+                endpoint_constraints = constraints.get(endpoint_key, {})
+
+                # Generate tests for this endpoint using all strategies
+                tests = await self.test_generator.generate_comprehensive_tests(
+                    endpoint=endpoint,
+                    constraints=endpoint_constraints
+                )
+
+                # Add endpoint info to each test
+                for test in tests:
+                    test['endpoint'] = endpoint.get('path', '')
+                    test['method'] = endpoint.get('method', 'GET')
+
+                all_tests.extend(tests)
+
+            return all_tests
+
+        except Exception as e:
+            logger.error(f"Error generating tests: {str(e)}")
+            return []
 
     def _save_parsed_data(self, doc_path: Path, parsed_data: Dict, constraints: Dict, tests: List):
         """Save parsed data and generated tests"""
