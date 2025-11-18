@@ -26,6 +26,8 @@ from src.workflow.state_transition_generator import StateTransitionGenerator
 from src.workflow.state_machine_validator import StateMachineValidator
 from src.testing.status_code_scenario_generator import StatusCodeScenarioGenerator
 from src.testing.status_code_coverage_tracker import StatusCodeCoverageTracker
+from src.testing.role_based_scenario_generator import RoleBasedScenarioGenerator, UserRole
+from src.testing.role_test_executor import RoleTestExecutor
 
 
 class TestRunner:
@@ -1196,6 +1198,119 @@ class TestRunner:
                     'matched': r.matched,
                     'scenario_type': r.scenario.scenario_type,
                     'description': r.scenario.description
+                }
+                for r in test_results
+            ]
+        }
+
+    async def test_role_based_access_control(
+        self,
+        endpoints: List[Dict[str, Any]],
+        roles: Optional[List[UserRole]] = None,
+        auth_tokens: Optional[Dict[UserRole, str]] = None,
+        custom_permissions: Optional[Dict[str, Dict[UserRole, Any]]] = None,
+        headers: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Test role-based access control (RBAC) across all endpoints
+
+        Args:
+            endpoints: List of endpoint dicts
+            roles: List of roles to test (defaults to all: admin, user, guest, unauthenticated)
+            auth_tokens: Authentication tokens for each role
+            custom_permissions: Custom permission matrix overrides
+            headers: Optional default headers
+
+        Returns:
+            RBAC test results and security report
+        """
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"🔐 ROLE-BASED ACCESS CONTROL (RBAC) TESTING")
+        logger.info(f"{'=' * 80}")
+
+        # Step 1: Generate role-based test scenarios
+        logger.info("🔧 Generating role-based test scenarios...")
+        scenario_generator = RoleBasedScenarioGenerator(
+            custom_permissions=custom_permissions,
+            auth_tokens=auth_tokens or {}
+        )
+
+        scenarios = scenario_generator.generate_all_role_scenarios(
+            endpoints,
+            roles=roles
+        )
+
+        scenario_summary = scenario_generator.get_summary(scenarios)
+        logger.info(f"   Total scenarios: {scenario_summary['total_scenarios']}")
+        logger.info(f"   Roles tested: {scenario_summary['unique_roles']}")
+        logger.info(f"   Scenarios by role:")
+        for role, count in scenario_summary['by_role'].items():
+            logger.info(f"      {role}: {count}")
+
+        # Step 2: Show permission matrix
+        logger.info("\n📊 Permission Matrix:")
+        permission_matrix = scenario_generator.visualize_permission_matrix(
+            endpoints,
+            roles=roles
+        )
+        logger.info(f"\n{permission_matrix}")
+
+        # Step 3: Execute role-based tests
+        logger.info("\n🧪 Executing role-based tests...")
+        role_executor = RoleTestExecutor(
+            base_url=self.base_url,
+            default_headers=headers or {},
+            timeout=settings.HTTP_TIMEOUT_SECONDS
+        )
+
+        test_results = await role_executor.execute_all_scenarios(scenarios)
+
+        # Step 4: Generate security report
+        logger.info("\n🔒 Generating security report...")
+        security_report = role_executor.generate_security_report()
+        role_summary = role_executor.get_role_summary()
+
+        logger.info(f"\n{security_report}")
+
+        # Summary
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"RBAC TESTING COMPLETE")
+        logger.info(f"{'=' * 80}")
+        logger.info(f"Total Tests: {role_summary['total_tests']}")
+        logger.info(f"Correctness Rate: {role_summary['correctness_rate']:.1f}%")
+        logger.info(f"Violations: {role_summary['total_violations']}")
+
+        if role_summary['total_violations'] > 0:
+            logger.warning(f"\n⚠️  Permission violations detected:")
+            logger.warning(f"   Critical: {role_summary['violations_by_severity']['critical']}")
+            logger.warning(f"   Medium: {role_summary['violations_by_severity']['medium']}")
+            logger.warning(f"   Low: {role_summary['violations_by_severity']['low']}")
+        else:
+            logger.success(f"\n✅ No permission violations detected!")
+
+        return {
+            'scenario_summary': scenario_summary,
+            'role_summary': role_summary,
+            'security_report': security_report,
+            'permission_matrix': permission_matrix,
+            'violations': [
+                {
+                    'endpoint': v.endpoint_key,
+                    'role': v.role.value,
+                    'violation_type': v.violation_type,
+                    'severity': v.severity,
+                    'description': v.description
+                }
+                for v in role_executor.violations
+            ],
+            'test_results': [
+                {
+                    'endpoint': r.scenario.endpoint_key,
+                    'role': r.scenario.role.value,
+                    'expected_access': r.scenario.access_level.value,
+                    'actual_status': r.actual_status_code,
+                    'access_correct': r.access_correct,
+                    'violation_type': r.violation_type
                 }
                 for r in test_results
             ]
