@@ -30,6 +30,8 @@ from src.testing.role_based_scenario_generator import RoleBasedScenarioGenerator
 from src.testing.role_test_executor import RoleTestExecutor
 from src.testing.error_scenario_generator import ErrorScenarioGenerator
 from src.testing.error_response_validator import ErrorResponseValidator
+from src.validation.schema_validator import SchemaValidator, ValidationResult
+from src.validation.openapi_schema_parser import OpenAPISchemaParser
 
 
 class TestRunner:
@@ -1474,6 +1476,241 @@ class TestRunner:
                 }
                 for r in test_results
             ]
+        }
+
+    async def validate_schemas(
+        self,
+        endpoints: List[Dict[str, Any]],
+        openapi_spec: Dict[str, Any],
+        base_url: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        strict_mode: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Validate API responses against OpenAPI schemas
+
+        Tests each endpoint and validates responses match documented schemas.
+        Detects schema violations like missing fields, wrong types, invalid formats.
+
+        Args:
+            endpoints: List of endpoint dicts
+            openapi_spec: OpenAPI specification as dict
+            base_url: API base URL (defaults to http://localhost:8000)
+            auth_token: Optional auth token for requests
+            strict_mode: If True, reject unexpected fields
+
+        Returns:
+            Dict with validation results and summary
+        """
+        logger.info("=" * 80)
+        logger.info("📋 VALIDATING API RESPONSES AGAINST SCHEMAS")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Set defaults
+        if base_url is None:
+            base_url = "http://localhost:8000"
+
+        # Build headers
+        headers = {}
+        if auth_token:
+            headers['Authorization'] = f'Bearer {auth_token}'
+
+        # Step 1: Parse OpenAPI spec
+        logger.info("📖 Parsing OpenAPI specification...")
+        parser = OpenAPISchemaParser(openapi_spec)
+
+        endpoint_schemas = parser.extract_endpoint_schemas()
+        logger.info(f"   Extracted schemas for {len(endpoint_schemas)} endpoints")
+        logger.info("")
+
+        # Step 2: Initialize validator
+        logger.info(f"🔍 Initializing schema validator (strict_mode={strict_mode})...")
+        validator = SchemaValidator(strict_mode=strict_mode)
+        logger.info("")
+
+        # Step 3: Test each endpoint and validate response
+        logger.info("🧪 Testing endpoints and validating responses...")
+        logger.info("")
+
+        validation_results = []
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            for endpoint in endpoints:
+                method = endpoint.get('method', 'GET')
+                path = endpoint.get('path', '')
+                endpoint_key = f"{method} {path}"
+
+                logger.info(f"Testing: {endpoint_key}")
+
+                # Get schema for this endpoint
+                endpoint_schema = endpoint_schemas.get(endpoint_key)
+
+                if not endpoint_schema:
+                    logger.warning(f"   ⚠️  No schema found in OpenAPI spec")
+                    validation_results.append({
+                        'endpoint': endpoint_key,
+                        'schema_found': False,
+                        'tested': False,
+                        'reason': 'No schema in OpenAPI spec'
+                    })
+                    logger.info("")
+                    continue
+
+                try:
+                    # Make request
+                    url = base_url + path
+                    response = await client.request(
+                        method=method,
+                        url=url,
+                        headers=headers
+                    )
+
+                    status_code = response.status_code
+                    logger.info(f"   Response: {status_code}")
+
+                    # Get expected schema for this status code
+                    response_schema = endpoint_schema.response_schemas.get(status_code)
+
+                    if not response_schema:
+                        # Try to find closest match (e.g., 2XX for 200)
+                        response_schema = endpoint_schema.response_schemas.get(200)
+
+                    if not response_schema:
+                        logger.warning(f"   ⚠️  No schema defined for status {status_code}")
+                        validation_results.append({
+                            'endpoint': endpoint_key,
+                            'schema_found': True,
+                            'status_code': status_code,
+                            'tested': False,
+                            'reason': f'No schema for status {status_code}'
+                        })
+                        logger.info("")
+                        continue
+
+                    # Parse response
+                    try:
+                        response_data = response.json()
+                    except Exception:
+                        logger.warning(f"   ⚠️  Response is not JSON")
+                        validation_results.append({
+                            'endpoint': endpoint_key,
+                            'schema_found': True,
+                            'status_code': status_code,
+                            'tested': False,
+                            'reason': 'Response is not JSON'
+                        })
+                        logger.info("")
+                        continue
+
+                    # Validate against schema
+                    result: ValidationResult = validator.validate(
+                        response_data,
+                        response_schema,
+                        field_path=endpoint_key
+                    )
+
+                    if result.valid:
+                        logger.info(f"   ✅ Schema validation passed")
+                    else:
+                        logger.error(f"   ❌ Schema validation failed ({len(result.violations)} violations)")
+                        for v in result.violations[:3]:  # Show first 3
+                            logger.error(f"      • {v.description}")
+
+                    validation_results.append({
+                        'endpoint': endpoint_key,
+                        'schema_found': True,
+                        'status_code': status_code,
+                        'tested': True,
+                        'valid': result.valid,
+                        'violations': [
+                            {
+                                'type': v.violation_type.value,
+                                'severity': v.severity.value,
+                                'field_path': v.field_path,
+                                'expected': v.expected,
+                                'actual': v.actual,
+                                'description': v.description
+                            }
+                            for v in result.violations
+                        ],
+                        'violation_count': len(result.violations),
+                        'critical_count': len(result.critical_violations),
+                        'high_count': len(result.high_violations)
+                    })
+
+                except Exception as e:
+                    logger.error(f"   ❌ Request failed: {str(e)}")
+                    validation_results.append({
+                        'endpoint': endpoint_key,
+                        'schema_found': True,
+                        'tested': False,
+                        'reason': f'Request failed: {str(e)}'
+                    })
+
+                logger.info("")
+
+        # Step 4: Generate summary
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("📊 SCHEMA VALIDATION SUMMARY")
+        logger.info("=" * 80)
+        logger.info("")
+
+        total_endpoints = len(validation_results)
+        tested = len([r for r in validation_results if r.get('tested')])
+        valid = len([r for r in validation_results if r.get('valid')])
+        invalid = len([r for r in validation_results if r.get('tested') and not r.get('valid')])
+        not_tested = total_endpoints - tested
+
+        logger.info(f"Total Endpoints: {total_endpoints}")
+        logger.info(f"   Tested: {tested}")
+        logger.info(f"   Not Tested: {not_tested}")
+        logger.info("")
+
+        if tested > 0:
+            logger.info(f"Validation Results:")
+            logger.info(f"   ✅ Valid: {valid} ({valid/tested*100:.1f}%)")
+            logger.info(f"   ❌ Invalid: {invalid} ({invalid/tested*100:.1f}%)")
+            logger.info("")
+
+        # Show violations summary
+        total_violations = sum(r.get('violation_count', 0) for r in validation_results)
+        total_critical = sum(r.get('critical_count', 0) for r in validation_results)
+        total_high = sum(r.get('high_count', 0) for r in validation_results)
+
+        if total_violations > 0:
+            logger.info(f"Total Violations: {total_violations}")
+            logger.info(f"   Critical: {total_critical}")
+            logger.info(f"   High: {total_high}")
+            logger.info("")
+
+        # Show failed endpoints
+        if invalid > 0:
+            logger.info("❌ Endpoints with schema violations:")
+            for r in validation_results:
+                if r.get('tested') and not r.get('valid'):
+                    endpoint = r['endpoint']
+                    v_count = r.get('violation_count', 0)
+                    logger.info(f"   • {endpoint}: {v_count} violations")
+            logger.info("")
+
+        logger.info("=" * 80)
+        logger.info("✅ SCHEMA VALIDATION COMPLETE")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Return comprehensive results
+        return {
+            'total_endpoints': total_endpoints,
+            'tested': tested,
+            'not_tested': not_tested,
+            'valid': valid,
+            'invalid': invalid,
+            'total_violations': total_violations,
+            'total_critical': total_critical,
+            'total_high': total_high,
+            'validation_results': validation_results
         }
 
     def cleanup(self):
