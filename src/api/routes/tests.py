@@ -33,6 +33,62 @@ router = APIRouter()
 # In-memory storage for test sessions (use database/Redis in production)
 test_sessions_db: Dict[str, Dict[str, Any]] = {}
 
+# Thread-safety: Locks for concurrent access to test sessions
+# Each session gets its own lock to prevent race conditions
+from asyncio import Lock
+from collections import defaultdict
+
+class SessionLockManager:
+    """
+    Manages locks for test sessions to prevent race conditions
+
+    Provides thread-safe access to test session data with automatic
+    lock creation and cleanup.
+    """
+    def __init__(self):
+        self._locks: Dict[str, Lock] = {}
+        self._lock_creation_lock = Lock()  # Meta-lock for lock creation
+
+    async def get_lock(self, session_id: str) -> Lock:
+        """Get or create a lock for a session"""
+        if session_id not in self._locks:
+            async with self._lock_creation_lock:
+                # Double-check pattern to avoid race in lock creation
+                if session_id not in self._locks:
+                    self._locks[session_id] = Lock()
+        return self._locks[session_id]
+
+    def cleanup_lock(self, session_id: str):
+        """Remove lock after session completion"""
+        if session_id in self._locks:
+            del self._locks[session_id]
+
+# Global lock manager instance
+session_locks = SessionLockManager()
+
+
+# Helper functions for thread-safe session access
+async def get_session_safe(session_id: str) -> Dict[str, Any]:
+    """
+    Thread-safe session retrieval
+
+    Args:
+        session_id: Session ID to retrieve
+
+    Returns:
+        Session data dictionary (copy to prevent modifications outside lock)
+
+    Raises:
+        HTTPException: If session not found
+    """
+    if session_id not in test_sessions_db:
+        raise HTTPException(status_code=404, detail=f"Test session not found: {session_id}")
+
+    lock = await session_locks.get_lock(session_id)
+    async with lock:
+        # Return a copy to prevent external modifications
+        return test_sessions_db[session_id].copy()
+
 
 async def run_test_session_async(
     session_id: str,
@@ -59,12 +115,16 @@ async def run_test_session_async(
         semantic_contexts: Optional semantic contexts from documentation
         parameter_constraints: Optional parameter constraints for test data generation
     """
+    # THREAD-SAFETY: Acquire lock for this session to prevent race conditions
+    lock = await session_locks.get_lock(session_id)
+
     try:
         logger.info(f"Starting background test session: {session_id}")
 
-        # Update session status
-        test_sessions_db[session_id]["status"] = TestStatus.PROCESSING
-        test_sessions_db[session_id]["updated_at"] = datetime.now()
+        # Update session status (thread-safe)
+        async with lock:
+            test_sessions_db[session_id]["status"] = TestStatus.PROCESSING
+            test_sessions_db[session_id]["updated_at"] = datetime.now()
 
         # Create document store for RAG
         doc_store = DocumentStore(collection_name=f"doc_{document_id}")
@@ -84,35 +144,41 @@ async def run_test_session_async(
             # Get summary
             summary = runner.get_results_summary()
 
-            # Update session with results
-            test_sessions_db[session_id].update({
-                "status": TestStatus.COMPLETED,
-                "tested_endpoints": len(results),
-                "passed": summary["passed"],
-                "failed": summary["failed"],
-                "success_rate": summary["success_rate"],
-                "total_time": summary["total_time"],
-                "avg_time": summary["avg_time"],
-                "total_attempts": summary["total_attempts"],
-                "results": results,
-                "flow_stats": summary["flow_stats"],
-                "healing_report": summary.get("healing_report", {}),
-                "completed_at": datetime.now(),
-                "updated_at": datetime.now()
-            })
+            # Update session with results (thread-safe)
+            async with lock:
+                test_sessions_db[session_id].update({
+                    "status": TestStatus.COMPLETED,
+                    "tested_endpoints": len(results),
+                    "passed": summary["passed"],
+                    "failed": summary["failed"],
+                    "success_rate": summary["success_rate"],
+                    "total_time": summary["total_time"],
+                    "avg_time": summary["avg_time"],
+                    "total_attempts": summary["total_attempts"],
+                    "results": results,
+                    "flow_stats": summary["flow_stats"],
+                    "healing_report": summary.get("healing_report", {}),
+                    "completed_at": datetime.now(),
+                    "updated_at": datetime.now()
+                })
 
             logger.info(f"✅ Test session completed: {session_id} ({summary['passed']}/{summary['total_tests']} passed)")
 
     except Exception as e:
         logger.error(f"Test session failed: {session_id} - {e}", exc_info=True)
 
-        # Mark as failed
-        test_sessions_db[session_id].update({
-            "status": TestStatus.FAILED,
-            "error": str(e),
-            "updated_at": datetime.now(),
-            "completed_at": datetime.now()
-        })
+        # Mark as failed (thread-safe)
+        async with lock:
+            test_sessions_db[session_id].update({
+                "status": TestStatus.FAILED,
+                "error": str(e),
+                "updated_at": datetime.now(),
+                "completed_at": datetime.now()
+            })
+
+    finally:
+        # Clean up lock when session is done
+        session_locks.cleanup_lock(session_id)
 
 
 @router.post(
@@ -193,8 +259,10 @@ async def start_test_execution(
             "endpoints": endpoints
         }
 
-        # Store session
-        test_sessions_db[session_id] = session_metadata
+        # Store session (thread-safe)
+        lock = await session_locks.get_lock(session_id)
+        async with lock:
+            test_sessions_db[session_id] = session_metadata
 
         # Calculate estimated duration
         # Comprehensive mode: ~40 tests per endpoint * 0.5s = ~20s per endpoint
@@ -271,11 +339,9 @@ async def get_test_status(session_id: str):
 
     Use this endpoint to poll for updates while tests are running.
     """
-    if session_id not in test_sessions_db:
-        raise HTTPException(status_code=404, detail=f"Test session not found: {session_id}")
-
     try:
-        session = test_sessions_db[session_id]
+        # Thread-safe session retrieval
+        session = await get_session_safe(session_id)
 
         # Calculate progress
         total = session["total_endpoints"]
@@ -295,6 +361,9 @@ async def get_test_status(session_id: str):
             completed_at=session.get("completed_at")
         )
 
+    except HTTPException:
+        # Re-raise HTTP exceptions (like 404)
+        raise
     except Exception as e:
         logger.error(f"Failed to get test status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -320,11 +389,9 @@ async def get_test_report(session_id: str):
     Note: Only available after test session is completed.
     For in-progress sessions, use GET /tests/{session_id}/status
     """
-    if session_id not in test_sessions_db:
-        raise HTTPException(status_code=404, detail=f"Test session not found: {session_id}")
-
     try:
-        session = test_sessions_db[session_id]
+        # Thread-safe session retrieval
+        session = await get_session_safe(session_id)
 
         # Check if completed
         if session["status"] not in [TestStatus.COMPLETED, TestStatus.FAILED]:
@@ -421,12 +488,9 @@ async def delete_test_session(session_id: str):
     - Delete Flow DB collection for this session
     - Clean up any temporary files
     """
-    if session_id not in test_sessions_db:
-        raise HTTPException(status_code=404, detail=f"Test session not found: {session_id}")
-
     try:
-        # Get session data
-        session = test_sessions_db[session_id]
+        # Thread-safe session retrieval
+        session = await get_session_safe(session_id)
 
         # Delete Flow DB collection (if exists)
         try:
@@ -437,8 +501,13 @@ async def delete_test_session(session_id: str):
         except Exception as e:
             logger.warning(f"Could not cleanup Flow DB: {e}")
 
-        # Remove from storage
-        del test_sessions_db[session_id]
+        # Remove from storage (thread-safe)
+        lock = await session_locks.get_lock(session_id)
+        async with lock:
+            del test_sessions_db[session_id]
+
+        # Cleanup lock
+        session_locks.cleanup_lock(session_id)
 
         logger.info(f"✅ Test session deleted: {session_id}")
 
