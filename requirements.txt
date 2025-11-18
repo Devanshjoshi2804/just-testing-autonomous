@@ -33,6 +33,8 @@ openai==1.54.3
 anthropic==0.39.0
 groq==0.11.0
 mistralai==1.2.1
+litellm==1.52.9  # Unified interface for 100+ LLMs (local + cloud)
+ollama==0.3.3  # Local LLM client
 
 # ============================================================================
 # LangChain Ecosystem
