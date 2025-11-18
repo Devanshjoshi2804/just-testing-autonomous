@@ -12,6 +12,11 @@ from src.workflow.data_flow_tracker import (
     DataFlowTracker,
     ExtractedValue
 )
+from src.workflow.state_transition_tester import (
+    StateTransitionTester,
+    StateTransition,
+    WorkflowSequence
+)
 
 __all__ = [
     "DependencyGraph",
@@ -19,4 +24,7 @@ __all__ = [
     "ResourceNode",
     "DataFlowTracker",
     "ExtractedValue",
+    "StateTransitionTester",
+    "StateTransition",
+    "WorkflowSequence",
 ]

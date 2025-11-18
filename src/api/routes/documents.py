@@ -25,6 +25,7 @@ from src.rag.doc_store import DocumentStore
 from src.agents.endpoint_analyzer import EndpointAnalyzer
 from src.analysis.constraint_extractor import ConstraintExtractor
 from src.workflow.dependency_graph import DependencyGraph
+from src.workflow.state_transition_tester import StateTransitionTester
 
 
 router = APIRouter()
@@ -215,6 +216,31 @@ async def upload_document(
             for name, res in dependency_graph.resources.items()
         }
 
+        # Generate workflow sequences for state transition testing
+        logger.info("🔄 Generating workflow sequences for state transition testing...")
+        state_tester = StateTransitionTester(dependency_graph)
+        workflow_sequences = state_tester.generate_workflow_sequences()
+
+        # Get workflow summary
+        workflow_summary = state_tester.get_workflow_summary()
+        logger.info(
+            f"✅ Workflow sequences generated: {workflow_summary['total_workflows']} workflows, "
+            f"{workflow_summary['total_steps']} total steps, "
+            f"{workflow_summary['resource_count']} resources with workflows"
+        )
+
+        # Convert workflows to serializable format
+        serializable_workflows = [
+            {
+                'resource_name': wf.resource_name,
+                'sequence_name': wf.sequence_name,
+                'description': wf.description,
+                'expected_outcome': wf.expected_outcome,
+                'steps': wf.steps
+            }
+            for wf in workflow_sequences
+        ]
+
         # Convert constraints to serializable format
         serializable_constraints = {}
         for endpoint_key, constraints_map in endpoint_constraints.items():
@@ -261,11 +287,16 @@ async def upload_document(
                 "parameters_with_constraints": total_with_constraints,
                 "coverage_percentage": total_with_constraints/total_params*100 if total_params > 0 else 0
             },
-            # NEW: Dependency graph for workflow intelligence
+            # Dependency graph for workflow intelligence
             "dependency_graph": {
                 "dependencies": serializable_dependencies,
                 "resources": serializable_resources,
                 "summary": graph_summary
+            },
+            # Workflow sequences for state transition testing
+            "workflow_sequences": {
+                "workflows": serializable_workflows,
+                "summary": workflow_summary
             }
         }
         documents_db[doc_id] = doc_metadata
