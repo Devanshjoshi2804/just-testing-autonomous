@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from pathlib import Path as FilePath
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Path
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Path, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import ValidationError
@@ -26,6 +26,7 @@ from src.models import (
     validate_session_id,
     validate_document_id
 )
+from src.api.middleware.rate_limiter import rate_limit
 from src.executors.test_runner import TestRunner
 from src.rag.doc_store import DocumentStore
 from src.api.routes.documents import documents_db
@@ -187,11 +188,17 @@ async def run_test_session_async(
 @router.post(
     "/start",
     response_model=TestSessionResponse,
-    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 429: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Start Test Execution",
     description="Start testing all endpoints in a document with intelligent retry"
 )
+@rate_limit(
+    limit=settings.RATE_LIMIT_TEST_START,
+    window=settings.RATE_LIMIT_WINDOW,
+    key_prefix="test_start"
+)
 async def start_test_execution(
+    http_request: Request,
     request: TestExecutionRequest,
     background_tasks: BackgroundTasks
 ):

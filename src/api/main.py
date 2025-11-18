@@ -20,6 +20,7 @@ from src.api.health import comprehensive_health_check, readiness_check, liveness
 from src.api.middleware.request_id import request_id_middleware
 from src.api.middleware.logging_middleware import logging_middleware
 from src.api.middleware.security import security_headers_middleware
+from src.api.middleware.rate_limiter import rate_limit_middleware
 from src.exceptions import AutoTestException, create_error_response
 
 # ============================================================================
@@ -78,6 +79,14 @@ async def lifespan(app: FastAPI):
         logger.info("🔒 Authentication: ENABLED")
     else:
         logger.warning("⚠️  Authentication: DISABLED (not recommended for production)")
+
+    # Log rate limiting status
+    if settings.ENABLE_RATE_LIMITING:
+        logger.info(f"🛡️  Rate Limiting: ENABLED ({settings.DEFAULT_RATE_LIMIT} req/min default)")
+        logger.info(f"   - Upload: {settings.RATE_LIMIT_UPLOAD} req/min")
+        logger.info(f"   - Test Start: {settings.RATE_LIMIT_TEST_START} req/min")
+    else:
+        logger.warning("⚠️  Rate Limiting: DISABLED (not recommended for production)")
 
     if settings.ENVIRONMENT.lower() in ('production', 'prod') and not settings.REQUIRE_AUTH:
         logger.error("🚨 SECURITY WARNING: Authentication disabled in production!")
@@ -149,6 +158,10 @@ app.add_middleware(
 # ============================================================================
 # Security headers (applied first)
 app.middleware("http")(security_headers_middleware)
+
+# Rate limiting (applied early to reject bad requests quickly)
+if settings.ENABLE_RATE_LIMITING:
+    app.middleware("http")(rate_limit_middleware)
 
 # Request ID tracking
 app.middleware("http")(request_id_middleware)

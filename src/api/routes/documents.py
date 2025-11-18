@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import ValidationError
@@ -21,6 +21,7 @@ from src.models import (
     DocumentUploadRequest,
     validate_safe_string
 )
+from src.api.middleware.rate_limiter import rate_limit
 from src.parsers.document_parser import DocumentParser
 from src.parsers.enhanced_document_parser import EnhancedDocumentParser
 from src.parsers.text_splitter import DocumentChunker
@@ -40,11 +41,17 @@ documents_db = {}
 @router.post(
     "/upload",
     response_model=DocumentUploadResponse,
-    responses={400: {"model": ErrorResponse}, 422: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    responses={400: {"model": ErrorResponse}, 422: {"model": ErrorResponse}, 429: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Upload API Documentation",
     description="Upload PDF, JSON, or YAML API documentation for analysis and testing"
 )
+@rate_limit(
+    limit=settings.RATE_LIMIT_UPLOAD,
+    window=settings.RATE_LIMIT_WINDOW,
+    key_prefix="upload"
+)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(..., description="API documentation file"),
     name: Optional[str] = Form(None, description="Document name (max 200 chars)", max_length=200),
     description: Optional[str] = Form(None, description="Document description (max 1000 chars)", max_length=1000),

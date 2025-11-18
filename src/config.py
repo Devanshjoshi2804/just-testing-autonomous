@@ -189,6 +189,20 @@ class Settings(BaseSettings):
         description="Rate limit window in seconds"
     )
 
+    # Endpoint-specific rate limits (requests per minute)
+    RATE_LIMIT_UPLOAD: int = Field(
+        default=10,
+        description="Rate limit for document upload endpoint (expensive operation)"
+    )
+    RATE_LIMIT_TEST_START: int = Field(
+        default=20,
+        description="Rate limit for test execution start endpoint"
+    )
+    RATE_LIMIT_AUTH: int = Field(
+        default=5,
+        description="Rate limit for authentication endpoints (prevent brute force)"
+    )
+
     # ========================================================================
     # Development Settings
     # ========================================================================
