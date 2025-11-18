@@ -29,7 +29,6 @@ ENV/
 data/
 logs/
 results/
-uploads/
 *.db
 
 # Testing
