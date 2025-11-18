@@ -147,12 +147,37 @@ class TestRunner:
         logger.info(f"TestRunner initialized for session: {session_id}")
 
     async def __aenter__(self):
-        """Async context manager entry"""
+        """
+        Async context manager entry - Initialize HTTP client with connection pooling
+
+        Creates a shared HTTP client with:
+        - Connection pooling for performance
+        - Keep-alive connections for reuse
+        - Proper timeout configuration
+        - SSL verification
+        """
         self.client = httpx.AsyncClient(
-            timeout=settings.HTTP_TIMEOUT_SECONDS,
-            limits=httpx.Limits(max_connections=settings.HTTP_MAX_CONNECTIONS),
-            follow_redirects=True
+            # Timeout configuration
+            timeout=httpx.Timeout(
+                connect=10.0,  # Connection timeout
+                read=settings.HTTP_TIMEOUT_SECONDS,  # Read timeout
+                write=10.0,  # Write timeout
+                pool=5.0   # Pool acquisition timeout
+            ),
+            # Connection pooling for performance
+            limits=httpx.Limits(
+                max_connections=settings.HTTP_MAX_CONNECTIONS,  # Total connections
+                max_keepalive_connections=20,  # Keep-alive pool size
+                keepalive_expiry=30.0  # Keep connections alive for 30s
+            ),
+            # HTTP/2 support for better performance
+            http2=True,
+            # Follow redirects automatically
+            follow_redirects=True,
+            # Verify SSL certificates (set to False only in development)
+            verify=not settings.DEBUG
         )
+        logger.info(f"✅ HTTP client initialized with connection pooling (max={settings.HTTP_MAX_CONNECTIONS}, keepalive=20)")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -1539,8 +1564,9 @@ class TestRunner:
 
         validation_results = []
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            for endpoint in endpoints:
+        # PERFORMANCE: Reuse existing HTTP client with connection pooling
+        # instead of creating a new one (resource leak fix)
+        for endpoint in endpoints:
                 method = endpoint.get('method', 'GET')
                 path = endpoint.get('path', '')
                 endpoint_key = f"{method} {path}"
@@ -1562,9 +1588,9 @@ class TestRunner:
                     continue
 
                 try:
-                    # Make request
+                    # Make request using shared HTTP client (connection pooling)
                     url = base_url + path
-                    response = await client.request(
+                    response = await self.client.request(
                         method=method,
                         url=url,
                         headers=headers
@@ -1769,8 +1795,8 @@ class TestRunner:
         logger.info("")
 
         # Learning iterations
-        async with httpx.AsyncClient(timeout=30) as client:
-            for iteration in range(1, iterations + 1):
+        # PERFORMANCE: Reuse existing HTTP client with connection pooling
+        for iteration in range(1, iterations + 1):
                 logger.info("=" * 80)
                 logger.info(f"ITERATION {iteration}/{iterations}")
                 logger.info("=" * 80)
@@ -1795,9 +1821,9 @@ class TestRunner:
                         test_payload = None
 
                     try:
-                        # Make request
+                        # Make request using shared HTTP client (connection pooling)
                         url = base_url + path
-                        response = await client.request(
+                        response = await self.client.request(
                             method=method,
                             url=url,
                             headers=headers,

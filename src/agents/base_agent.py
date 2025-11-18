@@ -86,6 +86,61 @@ class BaseAgent:
             logger.error(f"{self.agent_name} LLM invocation failed: {e}")
             raise
 
+    async def ainvoke(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """
+        Asynchronously invoke LLM (non-blocking)
+
+        Runs synchronous LLM invocation in a thread pool executor to avoid
+        blocking the async event loop.
+
+        Args:
+            prompt: User prompt
+            system_prompt: Optional system prompt for context
+
+        Returns:
+            LLM response text
+        """
+        import asyncio
+        from functools import partial
+
+        try:
+            # Prepare the synchronous function call
+            loop = asyncio.get_event_loop()
+
+            # For Ollama, combine system and user prompts
+            if self.llm_provider == "ollama":
+                full_prompt = prompt
+                if system_prompt:
+                    full_prompt = f"{system_prompt}\n\n{prompt}"
+
+                # Run in executor to avoid blocking event loop
+                response = await loop.run_in_executor(
+                    None,  # Uses default ThreadPoolExecutor
+                    partial(self.llm.invoke, full_prompt)
+                )
+                result = response if isinstance(response, str) else str(response)
+
+            else:
+                # For chat models (OpenAI, Anthropic, Groq)
+                messages = []
+                if system_prompt:
+                    messages.append(("system", system_prompt))
+                messages.append(("human", prompt))
+
+                # Run in executor to avoid blocking event loop
+                response = await loop.run_in_executor(
+                    None,  # Uses default ThreadPoolExecutor
+                    partial(self.llm.invoke, messages)
+                )
+                result = response.content
+
+            logger.debug(f"{self.agent_name} async response length: {len(result)} chars")
+            return result
+
+        except Exception as e:
+            logger.error(f"{self.agent_name} async LLM invocation failed: {e}")
+            raise
+
     def parse_json_response(self, response: str) -> Dict[str, Any]:
         """
         Parse JSON from LLM response, handling markdown code blocks
