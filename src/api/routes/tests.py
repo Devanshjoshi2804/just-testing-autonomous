@@ -7,11 +7,12 @@ import time
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
-from pathlib import Path
+from pathlib import Path as FilePath
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Path
 from fastapi.responses import JSONResponse
 from loguru import logger
+from pydantic import ValidationError
 
 from src.config import settings
 from src.models import (
@@ -21,7 +22,9 @@ from src.models import (
     TestReportResponse,
     TestResult,
     TestStatus,
-    ErrorResponse
+    ErrorResponse,
+    validate_session_id,
+    validate_document_id
 )
 from src.executors.test_runner import TestRunner
 from src.rag.doc_store import DocumentStore
@@ -323,11 +326,18 @@ async def start_test_execution(
 @router.get(
     "/{session_id}/status",
     response_model=TestStatusResponse,
-    responses={404: {"model": ErrorResponse}},
+    responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
     summary="Get Test Session Status",
     description="Get real-time status and progress of a test session"
 )
-async def get_test_status(session_id: str):
+async def get_test_status(
+    session_id: str = Path(
+        ...,
+        description="Test session ID (format: session_<hex>_<timestamp>)",
+        min_length=10,
+        max_length=100
+    )
+):
     """
     Get test session status and progress
 
@@ -340,6 +350,20 @@ async def get_test_status(session_id: str):
     Use this endpoint to poll for updates while tests are running.
     """
     try:
+        # VALIDATION: Validate session ID format
+        try:
+            validate_session_id(session_id)
+        except ValueError as ve:
+            logger.warning(f"Invalid session ID format: {session_id} - {ve}")
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "ValidationError",
+                    "message": str(ve),
+                    "field": "session_id"
+                }
+            )
+
         # Thread-safe session retrieval
         session = await get_session_safe(session_id)
 
@@ -372,11 +396,18 @@ async def get_test_status(session_id: str):
 @router.get(
     "/{session_id}/report",
     response_model=TestReportResponse,
-    responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+    responses={404: {"model": ErrorResponse}, 400: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
     summary="Get Test Report",
     description="Get complete test results and detailed report"
 )
-async def get_test_report(session_id: str):
+async def get_test_report(
+    session_id: str = Path(
+        ...,
+        description="Test session ID (format: session_<hex>_<timestamp>)",
+        min_length=10,
+        max_length=100
+    )
+):
     """
     Get complete test report
 
@@ -390,6 +421,20 @@ async def get_test_report(session_id: str):
     For in-progress sessions, use GET /tests/{session_id}/status
     """
     try:
+        # VALIDATION: Validate session ID format
+        try:
+            validate_session_id(session_id)
+        except ValueError as ve:
+            logger.warning(f"Invalid session ID format: {session_id} - {ve}")
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "ValidationError",
+                    "message": str(ve),
+                    "field": "session_id"
+                }
+            )
+
         # Thread-safe session retrieval
         session = await get_session_safe(session_id)
 
@@ -476,10 +521,18 @@ async def list_test_sessions():
 
 @router.delete(
     "/{session_id}",
+    responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
     summary="Delete Test Session",
     description="Delete a test session and cleanup resources"
 )
-async def delete_test_session(session_id: str):
+async def delete_test_session(
+    session_id: str = Path(
+        ...,
+        description="Test session ID (format: session_<hex>_<timestamp>)",
+        min_length=10,
+        max_length=100
+    )
+):
     """
     Delete test session and cleanup
 
@@ -489,6 +542,20 @@ async def delete_test_session(session_id: str):
     - Clean up any temporary files
     """
     try:
+        # VALIDATION: Validate session ID format
+        try:
+            validate_session_id(session_id)
+        except ValueError as ve:
+            logger.warning(f"Invalid session ID format: {session_id} - {ve}")
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "ValidationError",
+                    "message": str(ve),
+                    "field": "session_id"
+                }
+            )
+
         # Thread-safe session retrieval
         session = await get_session_safe(session_id)
 

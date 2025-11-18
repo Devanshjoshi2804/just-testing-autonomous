@@ -6,17 +6,20 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 from loguru import logger
+from pydantic import ValidationError
 
 from src.config import settings
 from src.models import (
     DocumentUploadResponse,
     DocumentListResponse,
     ErrorResponse,
-    EndpointInfo
+    EndpointInfo,
+    DocumentUploadRequest,
+    validate_safe_string
 )
 from src.parsers.document_parser import DocumentParser
 from src.parsers.enhanced_document_parser import EnhancedDocumentParser
@@ -37,15 +40,15 @@ documents_db = {}
 @router.post(
     "/upload",
     response_model=DocumentUploadResponse,
-    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    responses={400: {"model": ErrorResponse}, 422: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     summary="Upload API Documentation",
     description="Upload PDF, JSON, or YAML API documentation for analysis and testing"
 )
 async def upload_document(
     file: UploadFile = File(..., description="API documentation file"),
-    name: str = Form(None, description="Document name"),
-    description: str = Form(None, description="Document description"),
-    base_url: str = Form(None, description="API base URL (optional)")
+    name: Optional[str] = Form(None, description="Document name (max 200 chars)", max_length=200),
+    description: Optional[str] = Form(None, description="Document description (max 1000 chars)", max_length=1000),
+    base_url: Optional[str] = Form(None, description="API base URL (optional, must be valid http/https URL)", max_length=500)
 ):
     """
     Upload API documentation file
@@ -59,6 +62,29 @@ async def upload_document(
     5. Return document ID for testing
     """
     try:
+        # VALIDATION: Validate input parameters using Pydantic validators
+        try:
+            # Validate name, description, and base_url
+            validated_request = DocumentUploadRequest(
+                name=name,
+                description=description,
+                base_url=base_url
+            )
+            # Use validated values
+            name = validated_request.name
+            description = validated_request.description
+            base_url = validated_request.base_url
+
+        except ValidationError as ve:
+            logger.warning(f"Validation failed for upload request: {ve}")
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "ValidationError",
+                    "message": "Invalid input parameters",
+                    "details": ve.errors()
+                }
+            )
         # Validate file type
         file_ext = file.filename.split('.')[-1].lower()
         if file_ext not in settings.ALLOWED_EXTENSIONS:
