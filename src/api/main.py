@@ -21,6 +21,8 @@ from src.api.middleware.request_id import request_id_middleware
 from src.api.middleware.logging_middleware import logging_middleware
 from src.api.middleware.security import security_headers_middleware
 from src.api.middleware.rate_limiter import rate_limit_middleware
+from src.api.middleware.error_handler import register_error_handlers
+from src.api.middleware.compression import add_compression_middleware
 from src.exceptions import AutoTestException, create_error_response
 
 # ============================================================================
