@@ -28,6 +28,8 @@ from src.testing.status_code_scenario_generator import StatusCodeScenarioGenerat
 from src.testing.status_code_coverage_tracker import StatusCodeCoverageTracker
 from src.testing.role_based_scenario_generator import RoleBasedScenarioGenerator, UserRole
 from src.testing.role_test_executor import RoleTestExecutor
+from src.testing.error_scenario_generator import ErrorScenarioGenerator
+from src.testing.error_response_validator import ErrorResponseValidator
 
 
 class TestRunner:
@@ -1311,6 +1313,164 @@ class TestRunner:
                     'actual_status': r.actual_status_code,
                     'access_correct': r.access_correct,
                     'violation_type': r.violation_type
+                }
+                for r in test_results
+            ]
+        }
+
+    async def test_error_scenarios(
+        self,
+        endpoints: List[Dict[str, Any]],
+        documented_errors: Optional[Dict[str, List]] = None,
+        base_url: Optional[str] = None,
+        auth_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Test error scenarios for documented error conditions
+
+        Validates:
+        1. Each documented error condition can be triggered
+        2. Error responses have required fields
+        3. Error messages are helpful (not generic)
+        4. Error format is consistent
+        5. Error details provide context
+
+        Args:
+            endpoints: List of endpoint dicts
+            documented_errors: Optional dict of custom error conditions per endpoint
+            base_url: API base URL (defaults to http://localhost:8000)
+            auth_token: Optional auth token for requests
+
+        Returns:
+            Dict with error quality results and summary
+        """
+        logger.info("=" * 80)
+        logger.info("🔥 TESTING ERROR SCENARIOS")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Set defaults
+        if base_url is None:
+            base_url = "http://localhost:8000"
+
+        # Build headers
+        headers = {}
+        if auth_token:
+            headers['Authorization'] = f'Bearer {auth_token}'
+
+        # Step 1: Generate error scenarios
+        logger.info("📋 Generating error scenarios...")
+        generator = ErrorScenarioGenerator(documented_errors)
+
+        all_scenarios = generator.generate_all_error_scenarios(endpoints)
+
+        # Show summary
+        summary = generator.get_summary(all_scenarios)
+        logger.info(f"   Total scenarios: {summary['total_scenarios']}")
+        logger.info(f"   Error categories: {summary['unique_categories']}")
+        logger.info(f"   Status codes: {summary['unique_status_codes']}")
+        logger.info("")
+
+        logger.info("📊 Scenarios by category:")
+        for category, count in summary['by_category'].items():
+            logger.info(f"   {category}: {count} scenarios")
+        logger.info("")
+
+        logger.info("📊 Scenarios by status code:")
+        for code, count in sorted(summary['by_status_code'].items()):
+            logger.info(f"   {code}: {count} scenarios")
+        logger.info("")
+
+        # Step 2: Validate error scenarios
+        logger.info("🧪 Validating error scenarios...")
+        logger.info("")
+
+        validator = ErrorResponseValidator(
+            base_url=base_url,
+            default_headers=headers,
+            timeout=30
+        )
+
+        test_results = await validator.validate_all_scenarios(all_scenarios)
+
+        # Step 3: Generate quality report
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("📊 ERROR QUALITY ANALYSIS")
+        logger.info("=" * 80)
+        logger.info("")
+
+        quality_summary = validator.get_quality_summary()
+
+        if 'error' in quality_summary:
+            logger.error(f"❌ {quality_summary['error']}")
+            return {'error': quality_summary['error']}
+
+        total = quality_summary['total_scenarios']
+        avg_score = quality_summary['average_quality_score']
+        high_quality = quality_summary['high_quality_count']
+        medium_quality = quality_summary['medium_quality_count']
+        low_quality = quality_summary['low_quality_count']
+
+        logger.info(f"Total Error Scenarios: {total}")
+        logger.info(f"Average Quality Score: {avg_score:.0%}")
+        logger.info("")
+
+        logger.info("Quality Distribution:")
+        logger.info(f"   ✅ High Quality (≥70%): {high_quality} ({high_quality/total*100:.1f}%)")
+        logger.info(f"   ⚠️  Medium Quality (40-70%): {medium_quality} ({medium_quality/total*100:.1f}%)")
+        logger.info(f"   ❌ Low Quality (<40%): {low_quality} ({low_quality/total*100:.1f}%)")
+        logger.info("")
+
+        # Show common issues
+        if quality_summary['total_issues'] > 0:
+            logger.info(f"Common Quality Issues ({quality_summary['total_issues']} total):")
+            for issue_type, count in sorted(
+                quality_summary['issue_breakdown'].items(),
+                key=lambda x: -x[1]
+            )[:5]:
+                logger.info(f"   {issue_type}: {count} occurrences")
+            logger.info("")
+
+        # Show detailed report
+        logger.info("=" * 80)
+        detailed_report = validator.generate_quality_report()
+        print(detailed_report)
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("✅ ERROR SCENARIO TESTING COMPLETE")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Return comprehensive results
+        return {
+            'total_scenarios': total,
+            'average_quality_score': avg_score,
+            'quality_distribution': {
+                'high_quality': high_quality,
+                'medium_quality': medium_quality,
+                'low_quality': low_quality
+            },
+            'total_issues': quality_summary['total_issues'],
+            'issue_breakdown': quality_summary['issue_breakdown'],
+            'test_results': [
+                {
+                    'endpoint': r.scenario.endpoint_key,
+                    'error_condition': r.scenario.error_condition.condition_name,
+                    'expected_status': r.scenario.error_condition.expected_status_code,
+                    'actual_status': r.actual_status_code,
+                    'status_matches': r.status_code_matches,
+                    'has_required_fields': r.has_required_fields,
+                    'quality_score': r.message_quality_score,
+                    'issues': [
+                        {
+                            'type': issue.issue_type,
+                            'severity': issue.severity,
+                            'description': issue.description
+                        }
+                        for issue in r.quality_issues
+                    ]
                 }
                 for r in test_results
             ]
