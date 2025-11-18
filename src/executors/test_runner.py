@@ -24,6 +24,8 @@ from src.workflow.data_flow_tracker import DataFlowTracker
 from src.workflow.dependency_graph import DependencyGraph
 from src.workflow.state_transition_generator import StateTransitionGenerator
 from src.workflow.state_machine_validator import StateMachineValidator
+from src.testing.status_code_scenario_generator import StatusCodeScenarioGenerator
+from src.testing.status_code_coverage_tracker import StatusCodeCoverageTracker
 
 
 class TestRunner:
@@ -1103,6 +1105,100 @@ class TestRunner:
             "flow_stats": self.flow_store.get_stats(),
             "healing_report": self.get_healing_report(),
             "results": self.results,
+        }
+
+    async def test_status_code_coverage(
+        self,
+        endpoints: List[Dict[str, Any]],
+        documented_responses: Optional[Dict[str, List[int]]] = None,
+        headers: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Test status code coverage - ensure all documented error scenarios are tested
+
+        Args:
+            endpoints: List of endpoint dicts
+            documented_responses: Optional dict mapping endpoint_key to list of documented status codes
+            headers: Optional custom headers
+
+        Returns:
+            Status code coverage report
+        """
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"📊 STATUS CODE COVERAGE TESTING")
+        logger.info(f"{'=' * 80}")
+
+        # Step 1: Generate status code scenarios
+        logger.info("🔧 Generating status code test scenarios...")
+        scenario_generator = StatusCodeScenarioGenerator(documented_responses)
+
+        scenarios = scenario_generator.generate_all_scenarios(
+            endpoints,
+            documented_responses
+        )
+
+        scenario_summary = scenario_generator.get_summary(scenarios)
+        logger.info(f"   Total scenarios: {scenario_summary['total_scenarios']}")
+        logger.info(f"   Unique status codes: {scenario_summary['unique_status_codes']}")
+        logger.info(f"   Scenario types:")
+        for stype, count in scenario_summary['by_type'].items():
+            logger.info(f"      {stype}: {count}")
+
+        # Step 2: Initialize coverage tracker
+        logger.info("\n🧪 Executing status code scenarios...")
+        coverage_tracker = StatusCodeCoverageTracker(
+            base_url=self.base_url,
+            default_headers=headers or {},
+            timeout=settings.HTTP_TIMEOUT_SECONDS
+        )
+
+        # Set documented codes for tracking
+        if documented_responses:
+            for endpoint_key, codes in documented_responses.items():
+                coverage_tracker.set_documented_codes(endpoint_key, codes)
+
+        # Step 3: Execute all scenarios
+        test_results = await coverage_tracker.execute_all_scenarios(scenarios)
+
+        # Step 4: Generate coverage report
+        logger.info("\n📊 Calculating coverage...")
+        coverage_stats = coverage_tracker.get_overall_coverage()
+        coverage_report_text = coverage_tracker.generate_coverage_report()
+
+        logger.info(f"\n{coverage_report_text}")
+
+        # Summary
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"STATUS CODE COVERAGE COMPLETE")
+        logger.info(f"{'=' * 80}")
+        logger.info(f"Overall Coverage: {coverage_stats['overall_coverage_percentage']:.1f}%")
+        logger.info(f"Total Tests: {coverage_stats['total_tests']}")
+        logger.info(f"Match Rate: {coverage_stats['match_rate']:.1f}%")
+
+        failed = coverage_tracker.get_failed_scenarios()
+        if failed:
+            logger.warning(f"\n⚠️  {len(failed)} scenarios didn't return expected status code:")
+            for result in failed[:10]:  # Show first 10
+                logger.warning(
+                    f"   {result.scenario.endpoint_key}: "
+                    f"Expected {result.expected_status_code}, got {result.actual_status_code}"
+                )
+
+        return {
+            'scenario_summary': scenario_summary,
+            'coverage_stats': coverage_stats,
+            'coverage_report': coverage_report_text,
+            'test_results': [
+                {
+                    'endpoint': r.scenario.endpoint_key,
+                    'expected_code': r.expected_status_code,
+                    'actual_code': r.actual_status_code,
+                    'matched': r.matched,
+                    'scenario_type': r.scenario.scenario_type,
+                    'description': r.scenario.description
+                }
+                for r in test_results
+            ]
         }
 
     def cleanup(self):
