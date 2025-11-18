@@ -150,10 +150,35 @@ class Settings(BaseSettings):
     # ========================================================================
     # Security
     # ========================================================================
+    # API Authentication
     API_KEY_ENABLED: bool = False
-    API_KEY: str = ""
+    API_KEY: str = ""  # Deprecated: Use MASTER_API_KEY
+    MASTER_API_KEY: str = Field(
+        default="",
+        description="Master API key for administrative access"
+    )
+    REQUIRE_AUTH: bool = Field(
+        default=False,
+        description="Require API key authentication for all endpoints (disabled in development)"
+    )
+
+    # CORS Configuration
     CORS_ALLOWED_ORIGINS: str = "*"
     CORS_ALLOW_CREDENTIALS: bool = True
+
+    # Rate Limiting
+    ENABLE_RATE_LIMITING: bool = Field(
+        default=True,
+        description="Enable rate limiting middleware"
+    )
+    DEFAULT_RATE_LIMIT: int = Field(
+        default=100,
+        description="Default rate limit (requests per minute)"
+    )
+    RATE_LIMIT_WINDOW: int = Field(
+        default=60,
+        description="Rate limit window in seconds"
+    )
 
     # ========================================================================
     # Development Settings
