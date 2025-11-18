@@ -34,6 +34,8 @@ from src.validation.schema_validator import SchemaValidator, ValidationResult
 from src.validation.openapi_schema_parser import OpenAPISchemaParser
 from src.learning.constraint_learner import ConstraintLearner
 from src.learning.constraint_updater import ConstraintUpdater
+from src.metrics.coverage_tracker import CoverageTracker
+from src.metrics.coverage_reporter import CoverageReporter
 
 
 class TestRunner:
@@ -1926,6 +1928,84 @@ class TestRunner:
             'improvement_rate': (
                 iteration_results[-1]['total_constraints'] - iteration_results[0]['total_constraints']
             ) if len(iteration_results) > 1 else 0
+        }
+
+    async def generate_coverage_report(
+        self,
+        endpoints: List[Dict[str, Any]],
+        test_results: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Generate comprehensive coverage report
+
+        Analyzes test results and generates coverage metrics across
+        endpoints, parameters, status codes, and scenarios.
+
+        Args:
+            endpoints: List of endpoint dicts
+            test_results: List of test result dicts
+
+        Returns:
+            Dict with coverage report and statistics
+        """
+        logger.info("=" * 80)
+        logger.info("📊 GENERATING COVERAGE REPORT")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Initialize coverage tracker
+        tracker = CoverageTracker(session_id=self.session_id)
+
+        # Register all endpoints
+        tracker.register_endpoints(endpoints)
+
+        # Process test results
+        logger.info(f"Processing {len(test_results)} test results...")
+
+        for result in test_results:
+            endpoint_key = result.get('endpoint')
+            status_code = result.get('status_code')
+            parameters_tested = result.get('parameters_tested', [])
+            scenario_type = result.get('scenario_type')
+            passed = result.get('passed', True)
+
+            if endpoint_key and status_code:
+                tracker.record_test(
+                    endpoint_key=endpoint_key,
+                    status_code=status_code,
+                    parameters_tested=parameters_tested,
+                    scenario_type=scenario_type,
+                    passed=passed
+                )
+
+        logger.info("✅ Processed all test results")
+        logger.info("")
+
+        # Finalize tracking
+        tracker.finalize()
+
+        # Generate report
+        logger.info("Generating coverage report...")
+        reporter = CoverageReporter(tracker)
+
+        # Print report to console
+        reporter.print_report()
+
+        # Get summary
+        summary = tracker.get_coverage_summary()
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("✅ COVERAGE REPORT COMPLETE")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Return comprehensive results
+        return {
+            'summary': summary,
+            'gaps': tracker.get_coverage_gaps(),
+            'full_report': reporter.generate_report(),
+            'json_data': reporter.generate_json_report()
         }
 
     def cleanup(self):
