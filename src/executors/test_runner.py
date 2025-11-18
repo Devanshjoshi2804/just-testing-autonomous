@@ -32,6 +32,8 @@ from src.testing.error_scenario_generator import ErrorScenarioGenerator
 from src.testing.error_response_validator import ErrorResponseValidator
 from src.validation.schema_validator import SchemaValidator, ValidationResult
 from src.validation.openapi_schema_parser import OpenAPISchemaParser
+from src.learning.constraint_learner import ConstraintLearner
+from src.learning.constraint_updater import ConstraintUpdater
 
 
 class TestRunner:
@@ -1711,6 +1713,219 @@ class TestRunner:
             'total_critical': total_critical,
             'total_high': total_high,
             'validation_results': validation_results
+        }
+
+    async def test_with_adaptive_learning(
+        self,
+        endpoints: List[Dict[str, Any]],
+        base_url: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        iterations: int = 3,
+        merge_strategy: str = 'aggressive'
+    ) -> Dict[str, Any]:
+        """
+        Run tests with adaptive learning enabled
+
+        Tests endpoints multiple times, learning constraints from error responses
+        and improving test data generation over time.
+
+        Args:
+            endpoints: List of endpoint dicts
+            base_url: API base URL (defaults to http://localhost:8000)
+            auth_token: Optional auth token for requests
+            iterations: Number of learning iterations (default: 3)
+            merge_strategy: How to merge learned constraints ('conservative', 'aggressive')
+
+        Returns:
+            Dict with learning results and final constraints
+        """
+        logger.info("=" * 80)
+        logger.info("🧠 ADAPTIVE LEARNING MODE")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Set defaults
+        if base_url is None:
+            base_url = "http://localhost:8000"
+
+        # Build headers
+        headers = {}
+        if auth_token:
+            headers['Authorization'] = f'Bearer {auth_token}'
+
+        # Initialize learning components
+        learner = ConstraintLearner(min_confidence=0.7)
+        updater = ConstraintUpdater()
+
+        # Track constraints across iterations
+        current_constraints = self.parameter_constraints or {}
+        iteration_results = []
+
+        logger.info(f"Starting adaptive learning with {iterations} iterations")
+        logger.info(f"Merge strategy: {merge_strategy}")
+        logger.info(f"Initial constraints: {len(current_constraints)} fields")
+        logger.info("")
+
+        # Learning iterations
+        async with httpx.AsyncClient(timeout=30) as client:
+            for iteration in range(1, iterations + 1):
+                logger.info("=" * 80)
+                logger.info(f"ITERATION {iteration}/{iterations}")
+                logger.info("=" * 80)
+                logger.info("")
+
+                errors_found = 0
+                constraints_learned = 0
+
+                # Test each endpoint
+                for endpoint in endpoints:
+                    method = endpoint.get('method', 'GET')
+                    path = endpoint.get('path', '')
+                    endpoint_key = f"{method} {path}"
+
+                    logger.info(f"Testing: {endpoint_key}")
+
+                    # Generate test payload using current constraints
+                    if method in ['POST', 'PUT', 'PATCH']:
+                        # Simple test payload (in real usage, would use TestGenerator)
+                        test_payload = {"test": "data"}
+                    else:
+                        test_payload = None
+
+                    try:
+                        # Make request
+                        url = base_url + path
+                        response = await client.request(
+                            method=method,
+                            url=url,
+                            headers=headers,
+                            json=test_payload if test_payload else None
+                        )
+
+                        status_code = response.status_code
+                        logger.info(f"   Response: {status_code}")
+
+                        # Learn from error responses (4xx, 5xx)
+                        if 400 <= status_code < 600:
+                            errors_found += 1
+
+                            try:
+                                response_data = response.json()
+
+                                # Learn constraints from error
+                                learner.learn_from_error_response(
+                                    response_body=response_data,
+                                    status_code=status_code,
+                                    endpoint=endpoint_key
+                                )
+
+                                # Get learned constraints for this endpoint
+                                endpoint_constraints = learner.get_constraints_for_endpoint(endpoint_key)
+
+                                if endpoint_constraints:
+                                    constraints_learned += len(endpoint_constraints)
+                                    logger.info(f"   📚 Learned {len(endpoint_constraints)} constraints")
+
+                            except Exception as e:
+                                logger.debug(f"   Could not parse error response: {e}")
+
+                    except Exception as e:
+                        logger.error(f"   ❌ Request failed: {str(e)}")
+
+                    logger.info("")
+
+                # Update constraints after iteration
+                logger.info(f"Iteration {iteration} complete:")
+                logger.info(f"   Errors found: {errors_found}")
+                logger.info(f"   Constraints learned: {constraints_learned}")
+                logger.info("")
+
+                if constraints_learned > 0:
+                    # Get all learned constraints
+                    all_learned = learner.get_all_constraints()
+
+                    # Merge with current constraints
+                    for endpoint_key, field_constraints in all_learned.items():
+                        if endpoint_key != 'global':
+                            # Endpoint-specific constraints
+                            logger.info(f"Updating constraints for {endpoint_key}...")
+
+                        updated = updater.update_constraints(
+                            existing_constraints=current_constraints,
+                            learned_constraints=field_constraints,
+                            merge_strategy=merge_strategy
+                        )
+
+                        current_constraints = updated
+
+                    logger.info(f"✅ Updated constraints ({len(current_constraints)} fields total)")
+                    logger.info("")
+
+                # Store iteration results
+                iteration_results.append({
+                    'iteration': iteration,
+                    'errors_found': errors_found,
+                    'constraints_learned': constraints_learned,
+                    'total_constraints': len(current_constraints)
+                })
+
+        # Final summary
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("📊 ADAPTIVE LEARNING SUMMARY")
+        logger.info("=" * 80)
+        logger.info("")
+
+        learning_stats = learner.get_statistics()
+        update_summary = updater.get_update_summary()
+
+        logger.info(f"Total Iterations: {iterations}")
+        logger.info(f"Total Errors Processed: {learning_stats['total_errors_processed']}")
+        logger.info(f"Total Constraints Learned: {learning_stats['total_constraints_learned']}")
+        logger.info(f"High Confidence Constraints: {learning_stats['high_confidence_count']}")
+        logger.info("")
+
+        logger.info("Constraints by Type:")
+        for constraint_type, count in learning_stats.get('constraints_by_type', {}).items():
+            logger.info(f"   {constraint_type}: {count}")
+        logger.info("")
+
+        logger.info("Updates Applied:")
+        for update_type, count in update_summary['by_type'].items():
+            logger.info(f"   {update_type}: {count}")
+        logger.info("")
+
+        logger.info(f"Fields Affected: {len(update_summary['fields_affected'])}")
+        logger.info(f"Final Constraint Count: {len(current_constraints)} fields")
+        logger.info("")
+
+        # Show iteration progress
+        logger.info("Learning Progress:")
+        for result in iteration_results:
+            logger.info(
+                f"   Iteration {result['iteration']}: "
+                f"{result['errors_found']} errors → "
+                f"{result['constraints_learned']} constraints learned → "
+                f"{result['total_constraints']} total"
+            )
+        logger.info("")
+
+        logger.info("=" * 80)
+        logger.info("✅ ADAPTIVE LEARNING COMPLETE")
+        logger.info("=" * 80)
+        logger.info("")
+
+        # Return comprehensive results
+        return {
+            'iterations': iterations,
+            'learning_stats': learning_stats,
+            'update_summary': update_summary,
+            'iteration_results': iteration_results,
+            'final_constraints': current_constraints,
+            'learned_constraints': learner.export_constraints(),
+            'improvement_rate': (
+                iteration_results[-1]['total_constraints'] - iteration_results[0]['total_constraints']
+            ) if len(iteration_results) > 1 else 0
         }
 
     def cleanup(self):
