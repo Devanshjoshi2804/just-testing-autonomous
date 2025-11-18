@@ -15,8 +15,14 @@ class Settings(BaseSettings):
     # ========================================================================
     # Environment
     # ========================================================================
-    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
-    DEBUG: bool = True
+    ENVIRONMENT: Literal["development", "staging", "production"] = Field(
+        default="development",
+        description="Application environment"
+    )
+    DEBUG: bool = Field(
+        default=False,  # SECURE DEFAULT: Debug disabled by default
+        description="Enable debug mode (WARNING: Never enable in production!)"
+    )
 
     # ========================================================================
     # LLM API Keys
@@ -151,15 +157,18 @@ class Settings(BaseSettings):
     # Security
     # ========================================================================
     # API Authentication
-    API_KEY_ENABLED: bool = False
+    API_KEY_ENABLED: bool = Field(
+        default=True,  # SECURE DEFAULT: Authentication enabled by default
+        description="Enable API key authentication system"
+    )
     API_KEY: str = ""  # Deprecated: Use MASTER_API_KEY
     MASTER_API_KEY: str = Field(
         default="",
-        description="Master API key for administrative access"
+        description="Master API key for administrative access (REQUIRED in production)"
     )
     REQUIRE_AUTH: bool = Field(
-        default=False,
-        description="Require API key authentication for all endpoints (disabled in development)"
+        default=True,  # SECURE DEFAULT: Authentication required by default
+        description="Require API key authentication for all endpoints"
     )
 
     # CORS Configuration
@@ -202,6 +211,43 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
         return v
+
+    @root_validator
+    def validate_production_security(cls, values):
+        """
+        Enforce security requirements in production environment
+
+        This validator ensures that production deployments have:
+        - Authentication enabled
+        - Debug mode disabled
+        - Master API key configured
+        """
+        env = values.get('ENVIRONMENT', '').lower()
+
+        if env in ('production', 'prod'):
+            # Production must have authentication enabled
+            if not values.get('REQUIRE_AUTH', True):
+                raise ValueError(
+                    "🚨 SECURITY ERROR: REQUIRE_AUTH must be True in production! "
+                    "Deploying without authentication is a critical security risk."
+                )
+
+            # Production must not have debug mode enabled
+            if values.get('DEBUG', False):
+                raise ValueError(
+                    "🚨 SECURITY ERROR: DEBUG must be False in production! "
+                    "Debug mode exposes sensitive information."
+                )
+
+            # Production should have a master API key configured
+            if not values.get('MASTER_API_KEY'):
+                import warnings
+                warnings.warn(
+                    "⚠️  WARNING: MASTER_API_KEY not set in production! "
+                    "Set this for administrative access."
+                )
+
+        return values
 
     class Config:
         env_file = ".env"

@@ -203,11 +203,16 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Check if API key is valid
         if not api_key_manager.validate_api_key(api_key):
+            # SECURITY: Never log API keys (even partial). Use hash for correlation.
+            import hashlib
+            key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:12]
+
             logger.warning(
                 "Request rejected: Invalid API key",
                 path=request.url.path,
-                api_key=api_key[:10] + "...",  # Log partial key for debugging
-                client=request.client.host if request.client else "unknown"
+                key_hash=key_hash,  # Safe: Only log hash for correlation
+                client=request.client.host if request.client else "unknown",
+                method=request.method
             )
             return Response(
                 content='{"error": "Invalid API key", "message": "The provided API key is invalid or revoked"}',

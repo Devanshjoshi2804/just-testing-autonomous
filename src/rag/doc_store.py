@@ -55,9 +55,14 @@ class DocumentStore:
         try:
             self.collection = self.client.get_collection(name=self.collection_name)
             logger.info(f"Loaded existing collection: {self.collection_name}")
-        except:
+        except ValueError:
+            # Collection doesn't exist, create it
             self.collection = self.client.create_collection(name=self.collection_name)
             logger.info(f"Created new collection: {self.collection_name}")
+        except Exception as e:
+            # Unexpected error - log and re-raise
+            logger.error(f"Failed to get/create ChromaDB collection '{self.collection_name}': {e}")
+            raise
 
         logger.info(f"Document Store initialized at: {self.persist_directory}")
 

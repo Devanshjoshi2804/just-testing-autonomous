@@ -27,17 +27,92 @@ from src.exceptions import AutoTestException, create_error_response
 # ============================================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events"""
-    # Startup
+    """Startup and shutdown events with proper resource initialization"""
+    # ============================================================================
+    # STARTUP
+    # ============================================================================
     logger.info("🚀 Starting AutoTest-RL API...")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"LLM Provider: {settings.LLM_PROVIDER}")
     logger.info(f"LLM Model: {settings.LLM_MODEL}")
 
+    # Initialize Redis for caching
+    try:
+        from src.cache.redis_config import init_redis
+
+        init_redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            password=getattr(settings, 'REDIS_PASSWORD', None),
+            max_connections=50
+        )
+        logger.info("✅ Redis initialized successfully")
+
+        # Test connection
+        from src.cache.redis_config import get_redis
+        redis_client = get_redis()
+        redis_client.ping()
+        logger.info(f"✅ Redis connection verified: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+
+    except Exception as e:
+        logger.error(f"❌ Redis initialization failed: {e}")
+        logger.warning("⚠️  Cache features will be disabled")
+        logger.warning("⚠️  Application will continue without caching")
+
+    # Initialize Database
+    try:
+        from src.database.config import init_db
+
+        await init_db()
+        logger.info("✅ Database initialized successfully")
+        logger.info(f"✅ Database connection verified: {settings.DATABASE_URL.split('@')[1] if '@' in settings.DATABASE_URL else 'configured'}")
+
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        logger.warning("⚠️  Database features will be disabled")
+        logger.warning("⚠️  Application will continue with in-memory storage")
+
+    # Log security status
+    if settings.REQUIRE_AUTH:
+        logger.info("🔒 Authentication: ENABLED")
+    else:
+        logger.warning("⚠️  Authentication: DISABLED (not recommended for production)")
+
+    if settings.ENVIRONMENT.lower() in ('production', 'prod') and not settings.REQUIRE_AUTH:
+        logger.error("🚨 SECURITY WARNING: Authentication disabled in production!")
+
+    logger.info("✅ AutoTest-RL API startup complete")
+
+    # ============================================================================
+    # APPLICATION RUNNING
+    # ============================================================================
     yield
 
-    # Shutdown
+    # ============================================================================
+    # SHUTDOWN
+    # ============================================================================
     logger.info("👋 Shutting down AutoTest-RL API...")
+
+    # Cleanup Redis connections
+    try:
+        from src.cache.redis_config import get_redis_config
+        redis_config = get_redis_config()
+        redis_config.close()
+        await redis_config.close_async()
+        logger.info("✅ Redis connections closed")
+    except Exception as e:
+        logger.warning(f"Redis cleanup warning: {e}")
+
+    # Cleanup Database connections
+    try:
+        from src.database.config import close_db
+        await close_db()
+        logger.info("✅ Database connections closed")
+    except Exception as e:
+        logger.warning(f"Database cleanup warning: {e}")
+
+    logger.info("✅ Shutdown complete")
 
 
 # ============================================================================

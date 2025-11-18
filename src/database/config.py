@@ -310,3 +310,60 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
     db_config = get_db_config()
     async with db_config.get_async_session() as session:
         yield session
+
+
+# ============================================================================
+# Application Lifecycle Functions for FastAPI
+# ============================================================================
+
+async def init_db():
+    """
+    Initialize database on application startup
+
+    This function is called by FastAPI's lifespan handler.
+    It initializes the database configuration and creates tables.
+    """
+    try:
+        from src.config import settings
+
+        # Initialize with settings from config
+        database_url = getattr(settings, 'DATABASE_URL', 'sqlite:///./autotest.db')
+        async_database_url = getattr(settings, 'ASYNC_DATABASE_URL', 'sqlite+aiosqlite:///./autotest.db')
+
+        global _db_config
+        _db_config = DatabaseConfig(
+            database_url=database_url,
+            async_database_url=async_database_url,
+            echo=getattr(settings, 'DEBUG', False),
+            pool_size=20,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=3600
+        )
+
+        # Create tables asynchronously
+        await _db_config.create_tables_async()
+
+        # Test connection
+        async with _db_config.get_async_session() as session:
+            await session.execute("SELECT 1")
+
+        logger.info("✅ Database initialized and verified successfully")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        raise
+
+
+async def close_db():
+    """
+    Close database connections on application shutdown
+
+    This function is called by FastAPI's lifespan handler.
+    It properly disposes of database connection pools.
+    """
+    global _db_config
+    if _db_config:
+        await _db_config.close_async()
+        _db_config.close()
+        logger.info("Database connections closed successfully")

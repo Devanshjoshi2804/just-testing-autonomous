@@ -82,12 +82,35 @@ async def upload_document(
         # Generate unique document ID
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
 
-        # Save file
-        file_path = settings.UPLOAD_DIR / f"{doc_id}_{file.filename}"
+        # SECURITY: Sanitize filename to prevent path traversal attacks
+        # Remove path components (../, /, \, etc.) from user-supplied filename
+        safe_filename = Path(file.filename).name
+        if not safe_filename:
+            # If filename becomes empty after sanitization, use a generic name
+            safe_filename = f"document.{file_ext}"
+
+        # Additional security: Remove any remaining dangerous characters
+        safe_filename = safe_filename.replace('\x00', '').strip()
+
+        # Save file with sanitized name
+        file_path = settings.UPLOAD_DIR / f"{doc_id}_{safe_filename}"
+
+        # Ensure the final path is still within the upload directory
+        file_path = file_path.resolve()
+        upload_dir_resolved = settings.UPLOAD_DIR.resolve()
+
+        if not str(file_path).startswith(str(upload_dir_resolved)):
+            logger.error(f"Security: Path traversal attempt detected! File: {file.filename}")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid filename detected. Path traversal attempts are blocked."
+            )
+
+        # Save file securely
         with open(file_path, 'wb') as f:
             f.write(contents)
 
-        logger.info(f"File uploaded: {file.filename} ({file_size} bytes)")
+        logger.info(f"File uploaded securely: {safe_filename} ({file_size} bytes) -> {doc_id}")
 
         # Parse document with semantic analysis
         logger.info("🧠 Parsing document with semantic analysis...")

@@ -56,9 +56,14 @@ class FlowStore:
         try:
             self.collection = self.client.create_collection(name=self.collection_name)
             logger.info(f"Created Flow Store for session: {session_id}")
-        except:
+        except ValueError:
+            # Collection already exists, get it
             self.collection = self.client.get_collection(name=self.collection_name)
             logger.info(f"Loaded existing Flow Store: {session_id}")
+        except Exception as e:
+            # Unexpected error - log and re-raise
+            logger.error(f"Failed to create/get Flow Store collection for session '{session_id}': {e}")
+            raise
 
     def _generate_embedding(self, text: str) -> List[float]:
         """
