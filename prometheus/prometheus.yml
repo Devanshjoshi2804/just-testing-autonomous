@@ -1,0 +1,80 @@
+# Prometheus Configuration for AutoTest-RL
+# Phase 10: Observability & Monitoring
+
+global:
+  scrape_interval: 15s  # How frequently to scrape targets
+  evaluation_interval: 15s  # How frequently to evaluate rules
+  external_labels:
+    cluster: 'autotest-rl'
+    environment: 'development'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093  # Uncomment if using Alertmanager
+
+# Rule files
+rule_files:
+  # - "alerts/*.yml"  # Uncomment when adding alert rules
+
+# Scrape configurations
+scrape_configs:
+  # AutoTest-RL API metrics
+  - job_name: 'autotest-api'
+    static_configs:
+      - targets: ['api:8000']
+        labels:
+          service: 'autotest-api'
+          component: 'backend'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          component: 'monitoring'
+
+  # Node exporter (if running)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          service: 'node-exporter'
+          component: 'system-metrics'
+    # Only scrape if node-exporter is running
+    relabel_configs:
+      - source_labels: [__address__]
+        action: keep
+        regex: '.*'
+
+  # Redis exporter (if running)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+          component: 'cache'
+    # Only scrape if redis-exporter is running
+    relabel_configs:
+      - source_labels: [__address__]
+        action: keep
+        regex: '.*'
+
+  # ChromaDB metrics (if exposed)
+  - job_name: 'chromadb'
+    static_configs:
+      - targets: ['chromadb:8001']
+        labels:
+          service: 'chromadb'
+          component: 'vector-db'
+    metrics_path: '/api/v1/metrics'
+    # Only scrape if endpoint exists
+    relabel_configs:
+      - source_labels: [__address__]
+        action: keep
+        regex: '.*'

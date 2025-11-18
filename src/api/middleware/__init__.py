@@ -1,7 +1,8 @@
 """
 FastAPI Middleware
-Request processing, logging, security, authentication, and rate limiting
+Request processing, logging, security, authentication, rate limiting, and metrics
 Phase 9: Critical Infrastructure & Production Readiness
+Phase 10: Observability & Monitoring
 """
 
 from src.api.middleware.request_id import request_id_middleware
@@ -16,6 +17,7 @@ from src.api.middleware.authentication import (
     require_permission,
     check_permission,
 )
+from src.api.middleware.metrics_middleware import MetricsMiddleware, metrics_middleware
 
 __all__ = [
     "request_id_middleware",
@@ -31,4 +33,6 @@ __all__ = [
     "require_api_key",
     "require_permission",
     "check_permission",
+    "MetricsMiddleware",
+    "metrics_middleware",
 ]
