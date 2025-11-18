@@ -46,6 +46,26 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
 
     # ========================================================================
+    # Celery Configuration
+    # ========================================================================
+    CELERY_BROKER_URL: str = Field(
+        default="redis://redis:6379/0",
+        description="Celery broker URL (Redis)"
+    )
+    CELERY_RESULT_BACKEND: str = Field(
+        default="redis://redis:6379/0",
+        description="Celery result backend (Redis)"
+    )
+    CELERY_TASK_SERIALIZER: str = "json"
+    CELERY_RESULT_SERIALIZER: str = "json"
+    CELERY_ACCEPT_CONTENT: List[str] = ["json"]
+    CELERY_TIMEZONE: str = "UTC"
+    CELERY_ENABLE_UTC: bool = True
+    CELERY_TASK_TRACK_STARTED: bool = True
+    CELERY_TASK_TIME_LIMIT: int = 600  # 10 minutes
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
+
+    # ========================================================================
     # API Configuration
     # ========================================================================
     API_HOST: str = "0.0.0.0"
@@ -173,39 +193,51 @@ settings = Settings()
 # ============================================================================
 # Helper Functions
 # ============================================================================
-def get_llm_client():
-    """Get LLM client based on provider configuration"""
-    if settings.LLM_PROVIDER == "ollama":
+def get_llm_client(provider: str = None, model: str = None):
+    """
+    Get LLM client based on provider configuration
+
+    Args:
+        provider: Optional provider override (default: settings.LLM_PROVIDER)
+        model: Optional model override (default: settings.LLM_MODEL)
+
+    Returns:
+        LLM client instance
+    """
+    provider = provider or settings.LLM_PROVIDER
+    model = model or settings.LLM_MODEL
+
+    if provider == "ollama":
         from langchain_community.llms import Ollama
         return Ollama(
             base_url=settings.OLLAMA_BASE_URL,
-            model=settings.LLM_MODEL,
+            model=model,
             temperature=settings.LLM_TEMPERATURE,
             num_ctx=settings.LLM_MAX_TOKENS,
         )
-    elif settings.LLM_PROVIDER == "openai":
+    elif provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            model=settings.LLM_MODEL,
+            model=model,
             temperature=settings.LLM_TEMPERATURE,
             max_tokens=settings.LLM_MAX_TOKENS,
         )
-    elif settings.LLM_PROVIDER == "anthropic":
+    elif provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
-            model=settings.LLM_MODEL,
+            model=model,
             temperature=settings.LLM_TEMPERATURE,
             max_tokens=settings.LLM_MAX_TOKENS,
         )
-    elif settings.LLM_PROVIDER == "groq":
+    elif provider == "groq":
         from langchain_groq import ChatGroq
         return ChatGroq(
-            model=settings.LLM_MODEL,
+            model=model,
             temperature=settings.LLM_TEMPERATURE,
             max_tokens=settings.LLM_MAX_TOKENS,
         )
     else:
-        raise ValueError(f"Unsupported LLM provider: {settings.LLM_PROVIDER}")
+        raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
 def get_embedding_client():

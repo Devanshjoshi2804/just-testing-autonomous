@@ -25,30 +25,27 @@ class BaseAgent:
         self.agent_name = agent_name
         self.use_fast_llm = use_fast_llm
 
-        # Get LLM client
+        # Get LLM client - pass provider and model directly to avoid settings mutation
         if use_fast_llm:
-            # Temporarily set to fast model
-            original_provider = settings.LLM_PROVIDER
-            original_model = settings.LLM_MODEL
-
-            settings.LLM_PROVIDER = settings.FAST_LLM_PROVIDER
-            settings.LLM_MODEL = settings.FAST_LLM_MODEL
-
-            self.llm = get_llm_client()
-
-            # Restore original
-            settings.LLM_PROVIDER = original_provider
-            settings.LLM_MODEL = original_model
+            self.llm = get_llm_client(
+                provider=settings.FAST_LLM_PROVIDER,
+                model=settings.FAST_LLM_MODEL
+            )
+            self.llm_provider = settings.FAST_LLM_PROVIDER
+            self.llm_model = settings.FAST_LLM_MODEL
 
             logger.info(
                 f"{agent_name} initialized with FAST LLM: "
-                f"{settings.FAST_LLM_PROVIDER}/{settings.FAST_LLM_MODEL}"
+                f"{self.llm_provider}/{self.llm_model}"
             )
         else:
             self.llm = get_llm_client()
+            self.llm_provider = settings.LLM_PROVIDER
+            self.llm_model = settings.LLM_MODEL
+
             logger.info(
                 f"{agent_name} initialized with LLM: "
-                f"{settings.LLM_PROVIDER}/{settings.LLM_MODEL}"
+                f"{self.llm_provider}/{self.llm_model}"
             )
 
     def invoke(self, prompt: str, system_prompt: Optional[str] = None) -> str:
@@ -64,9 +61,7 @@ class BaseAgent:
         """
         try:
             # For Ollama, combine system and user prompts
-            if settings.LLM_PROVIDER == "ollama" or (
-                self.use_fast_llm and settings.FAST_LLM_PROVIDER == "ollama"
-            ):
+            if self.llm_provider == "ollama":
                 full_prompt = prompt
                 if system_prompt:
                     full_prompt = f"{system_prompt}\n\n{prompt}"

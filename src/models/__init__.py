@@ -59,6 +59,11 @@ class TestExecutionRequest(BaseModel):
     document_id: str = Field(..., description="Document ID to test")
     max_retries: Optional[int] = Field(3, ge=1, le=5, description="Max retry attempts per endpoint")
     use_optimal_order: Optional[bool] = Field(True, description="Use optimal testing order")
+    comprehensive_mode: Optional[bool] = Field(
+        True,
+        description="Enable comprehensive testing (semantic + LLM + security mutation tests). "
+                   "When enabled, generates 40+ tests per endpoint instead of 1-3 basic tests."
+    )
     test_types: Optional[List[TestType]] = Field(
         [TestType.POSITIVE],
         description="Types of tests to run"
@@ -70,6 +75,7 @@ class TestExecutionRequest(BaseModel):
                 "document_id": "doc_abc123",
                 "max_retries": 3,
                 "use_optimal_order": True,
+                "comprehensive_mode": True,
                 "test_types": ["positive"]
             }
         }
@@ -89,6 +95,14 @@ class DocumentUploadResponse(BaseModel):
     endpoints_found: int = Field(..., description="Number of endpoints found")
     chunks_created: int = Field(..., description="Number of text chunks")
     uploaded_at: datetime = Field(..., description="Upload timestamp")
+    parameters_with_constraints: Optional[int] = Field(
+        None,
+        description="Number of parameters with extracted constraints"
+    )
+    constraints_coverage: Optional[float] = Field(
+        None,
+        description="Percentage of parameters with constraints"
+    )
 
     class Config:
         json_schema_extra = {
@@ -100,6 +114,8 @@ class DocumentUploadResponse(BaseModel):
                 "base_url": "https://api.example.com",
                 "endpoints_found": 12,
                 "chunks_created": 8,
+                "parameters_with_constraints": 24,
+                "constraints_coverage": 85.7,
                 "uploaded_at": "2025-01-15T10:30:00Z"
             }
         }

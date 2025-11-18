@@ -19,9 +19,13 @@ from src.models import (
     EndpointInfo
 )
 from src.parsers.document_parser import DocumentParser
+from src.parsers.enhanced_document_parser import EnhancedDocumentParser
 from src.parsers.text_splitter import DocumentChunker
 from src.rag.doc_store import DocumentStore
 from src.agents.endpoint_analyzer import EndpointAnalyzer
+from src.analysis.constraint_extractor import ConstraintExtractor
+from src.workflow.dependency_graph import DependencyGraph
+from src.workflow.state_transition_tester import StateTransitionTester
 
 
 router = APIRouter()
@@ -85,23 +89,40 @@ async def upload_document(
 
         logger.info(f"File uploaded: {file.filename} ({file_size} bytes)")
 
-        # Parse document
-        parser = DocumentParser()
-        parsed = parser.parse(file_path)
+        # Parse document with semantic analysis
+        logger.info("🧠 Parsing document with semantic analysis...")
+        enhanced_parser = EnhancedDocumentParser(enable_semantic_analysis=True)
+        parsed = enhanced_parser.parse(file_path)
 
         # Extract base URL if not provided
         if not base_url:
-            base_url = parser.extract_base_url(parsed)
+            base_url = DocumentParser().extract_base_url(parsed)
 
         # Chunk text
         chunker = DocumentChunker()
         chunks = chunker.chunk_text(parsed['raw_text'])
 
-        # Store in ChromaDB
+        # Store in ChromaDB with semantic metadata
         doc_store = DocumentStore(collection_name=f"doc_{doc_id}")
+
+        # Add semantic context to chunk metadata if available
+        semantic_summary = parsed.get('semantic_summary', {})
+        for chunk in chunks:
+            chunk['metadata']['semantic_quality'] = semantic_summary.get('overall_quality', 'UNKNOWN')
+            chunk['metadata']['has_semantic_context'] = semantic_summary.get('endpoints_with_context', 0) > 0
+
         doc_store.add_documents(chunks)
 
         logger.info(f"Created {len(chunks)} chunks in ChromaDB")
+
+        # Log semantic analysis results
+        if semantic_summary:
+            logger.info(
+                f"📚 Semantic Analysis: {semantic_summary.get('endpoints_with_context', 0)} endpoints "
+                f"with {semantic_summary.get('total_examples', 0)} examples, "
+                f"{semantic_summary.get('total_best_practices', 0)} best practices, "
+                f"{semantic_summary.get('total_common_errors', 0)} error scenarios"
+            )
 
         # Analyze endpoints with AI
         analyzer = EndpointAnalyzer()
@@ -115,7 +136,135 @@ async def upload_document(
 
         logger.info(f"Found {len(endpoints)} endpoints")
 
-        # Store metadata
+        # Extract constraints for all endpoints
+        logger.info("🔍 Extracting parameter constraints...")
+        constraint_extractor = ConstraintExtractor()
+        endpoint_constraints = {}
+
+        for endpoint in endpoints:
+            endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
+
+            # Extract constraints from endpoint definition + documentation
+            constraints = constraint_extractor.extract_constraints(
+                endpoint=endpoint,
+                documentation=parsed['raw_text']
+            )
+
+            endpoint_constraints[endpoint_key] = constraints
+
+            # Log what we found
+            params_with_constraints = sum(
+                1 for c in constraints.values() if c.constraints
+            )
+            if params_with_constraints > 0:
+                logger.info(
+                    f"  {endpoint_key}: {params_with_constraints}/{len(constraints)} "
+                    f"params with constraints"
+                )
+
+        # Get constraint extraction summary
+        total_params = sum(len(c) for c in endpoint_constraints.values())
+        total_with_constraints = sum(
+            sum(1 for param in c.values() if param.constraints)
+            for c in endpoint_constraints.values()
+        )
+
+        logger.info(
+            f"✅ Constraint extraction complete: {total_with_constraints}/{total_params} "
+            f"params have constraints ({total_with_constraints/total_params*100 if total_params > 0 else 0:.1f}%)"
+        )
+
+        # Build dependency graph for workflow intelligence
+        logger.info("🔗 Building endpoint dependency graph...")
+        dependency_graph = DependencyGraph()
+        dependency_graph.build_graph(endpoints)
+
+        # Get graph summary
+        graph_summary = dependency_graph.get_graph_summary()
+        logger.info(
+            f"✅ Dependency graph built: {graph_summary['total_resources']} resources, "
+            f"{graph_summary['total_dependencies']} dependencies, "
+            f"{graph_summary['crud_resource_count']} complete CRUD chains"
+        )
+
+        # Convert dependencies to serializable format
+        serializable_dependencies = [
+            {
+                'source': dep.source_endpoint,
+                'target': dep.target_endpoint,
+                'type': dep.dependency_type,
+                'shared_resource': dep.shared_resource,
+                'confidence': dep.confidence,
+                'description': dep.description
+            }
+            for dep in dependency_graph.dependencies
+        ]
+
+        # Convert resources to serializable format
+        serializable_resources = {
+            name: {
+                'resource_name': res.resource_name,
+                'base_path': res.base_path,
+                'create_endpoint': res.create_endpoint,
+                'read_list_endpoint': res.read_list_endpoint,
+                'read_single_endpoint': res.read_single_endpoint,
+                'update_endpoint': res.update_endpoint,
+                'delete_endpoint': res.delete_endpoint,
+                'child_resources': res.child_resources,
+                'parent_resource': res.parent_resource
+            }
+            for name, res in dependency_graph.resources.items()
+        }
+
+        # Generate workflow sequences for state transition testing
+        logger.info("🔄 Generating workflow sequences for state transition testing...")
+        state_tester = StateTransitionTester(dependency_graph)
+        workflow_sequences = state_tester.generate_workflow_sequences()
+
+        # Get workflow summary
+        workflow_summary = state_tester.get_workflow_summary()
+        logger.info(
+            f"✅ Workflow sequences generated: {workflow_summary['total_workflows']} workflows, "
+            f"{workflow_summary['total_steps']} total steps, "
+            f"{workflow_summary['resource_count']} resources with workflows"
+        )
+
+        # Convert workflows to serializable format
+        serializable_workflows = [
+            {
+                'resource_name': wf.resource_name,
+                'sequence_name': wf.sequence_name,
+                'description': wf.description,
+                'expected_outcome': wf.expected_outcome,
+                'steps': wf.steps
+            }
+            for wf in workflow_sequences
+        ]
+
+        # Convert constraints to serializable format
+        serializable_constraints = {}
+        for endpoint_key, constraints_map in endpoint_constraints.items():
+            serializable_constraints[endpoint_key] = {
+                param_name: {
+                    'name': param_constraints.name,
+                    'type': param_constraints.type,
+                    'required': param_constraints.required,
+                    'description': param_constraints.description,
+                    'example_values': param_constraints.example_values,
+                    'constraints': [
+                        {
+                            'type': c.constraint_type,
+                            'value': c.value,
+                            'description': c.description,
+                            'confidence': c.confidence
+                        }
+                        for c in param_constraints.constraints
+                    ]
+                }
+                for param_name, param_constraints in constraints_map.items()
+            }
+
+        # Store metadata with semantic contexts and constraints
         doc_metadata = {
             "id": doc_id,
             "filename": file.filename,
@@ -128,6 +277,27 @@ async def upload_document(
             "uploaded_at": datetime.now(),
             "name": name or file.filename,
             "description": description,
+            # Semantic contexts for intelligent test generation
+            "semantic_contexts": parsed.get('semantic_contexts', {}),
+            "semantic_summary": semantic_summary,
+            # Parameter constraints for constraint-aware test data generation
+            "parameter_constraints": serializable_constraints,
+            "constraints_coverage": {
+                "total_parameters": total_params,
+                "parameters_with_constraints": total_with_constraints,
+                "coverage_percentage": total_with_constraints/total_params*100 if total_params > 0 else 0
+            },
+            # Dependency graph for workflow intelligence
+            "dependency_graph": {
+                "dependencies": serializable_dependencies,
+                "resources": serializable_resources,
+                "summary": graph_summary
+            },
+            # Workflow sequences for state transition testing
+            "workflow_sequences": {
+                "workflows": serializable_workflows,
+                "summary": workflow_summary
+            }
         }
         documents_db[doc_id] = doc_metadata
 
@@ -140,7 +310,9 @@ async def upload_document(
             base_url=extracted_base_url,
             endpoints_found=len(endpoints),
             chunks_created=len(chunks),
-            uploaded_at=doc_metadata["uploaded_at"]
+            uploaded_at=doc_metadata["uploaded_at"],
+            parameters_with_constraints=total_with_constraints,
+            constraints_coverage=round(total_with_constraints/total_params*100, 1) if total_params > 0 else 0
         )
 
         logger.info(f"✅ Document uploaded successfully: {doc_id}")
