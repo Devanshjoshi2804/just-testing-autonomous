@@ -305,7 +305,7 @@ async def root():
 # ============================================================================
 # API Routes
 # ============================================================================
-from src.api.routes import documents_router, tests_router, metrics_router
+from src.api.routes import documents_router, tests_router, metrics_router, intelligence_router
 
 app.include_router(
     documents_router,
@@ -322,6 +322,12 @@ app.include_router(
 app.include_router(
     metrics_router,
     tags=["Monitoring"]
+)
+
+app.include_router(
+    intelligence_router,
+    prefix="/api/v1/intelligence",
+    tags=["AI Intelligence"]
 )
 
 

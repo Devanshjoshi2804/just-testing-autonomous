@@ -18,6 +18,7 @@ from src.agents.error_fixer import ErrorFixer
 from src.rag.doc_store import DocumentStore
 from src.rag.flow_store import FlowStore
 from src.rl.test_optimizer import TestOptimizer
+from src.intelligence.hybrid_coordinator import get_hybrid_intelligence
 from src.analysis.change_detector import ChangeDetector
 from src.testing.test_healer import TestHealer
 from src.workflow.data_flow_tracker import DataFlowTracker
@@ -117,11 +118,19 @@ class TestRunner:
 
         self.fixer = ErrorFixer(doc_store, self.flow_store)
 
-        # Initialize RL optimizer
+        # Initialize Hybrid Intelligence (combines RL + LLM + Pattern Learning)
+        # This replaces the standalone RL optimizer with a more sophisticated system
         if use_rl:
-            self.rl_optimizer = TestOptimizer()
-            logger.info("🧠 RL Test Optimizer enabled")
+            self.hybrid_intelligence = get_hybrid_intelligence(
+                use_rl=True,   # Keep RL for tactical decisions
+                use_llm=True,  # Add LLM for strategic reasoning
+                use_patterns=True  # Add pattern learning
+            )
+            # Keep reference to RL optimizer for backward compatibility
+            self.rl_optimizer = self.hybrid_intelligence.rl_optimizer
+            logger.info("🧠 Hybrid Intelligence enabled (RL + LLM + Patterns)")
         else:
+            self.hybrid_intelligence = None
             self.rl_optimizer = None
             logger.info("Traditional test ordering enabled")
 
@@ -740,17 +749,30 @@ class TestRunner:
         ]
 
         # Determine testing order
-        if ordered and self.use_rl and self.rl_optimizer:
-            logger.info("🧠 Using RL-based test prioritization")
+        if ordered and self.use_rl and self.hybrid_intelligence:
+            logger.info("🧠 Using Hybrid Intelligence (RL + LLM + Patterns) for test prioritization")
 
-            # Build context for RL state
+            # Build context for intelligence analysis
             context = self._build_test_context()
 
-            # Let RL prioritize endpoints
-            ordered_endpoints = self.rl_optimizer.prioritize_endpoints(
+            # Use Hybrid Intelligence to analyze and prioritize
+            prioritized = await self.hybrid_intelligence.analyze_and_prioritize(
                 enriched_endpoints,
                 context
             )
+
+            # Convert prioritized results to ordered endpoints
+            ordered_endpoints = []
+            for endpoint_key, metadata in prioritized:
+                # Find the matching endpoint
+                for ep in enriched_endpoints:
+                    ep_key = f"{ep.get('method')} {ep.get('path')}"
+                    if ep_key == endpoint_key:
+                        # Add hybrid intelligence metadata
+                        ep['rl_priority'] = metadata['final_priority']
+                        ep['hybrid_metadata'] = metadata
+                        ordered_endpoints.append(ep)
+                        break
 
         elif ordered:
             # Fallback to traditional analyzer ordering
@@ -818,6 +840,12 @@ class TestRunner:
                     any_success = any(r.get('success', False) for r in endpoint_results)
                     self._update_endpoint_metadata(endpoint_key, any_success)
 
+                    # Record results to hybrid intelligence for learning
+                    if self.hybrid_intelligence:
+                        for result in endpoint_results:
+                            test_config = endpoint.get('hybrid_metadata', {})
+                            self.hybrid_intelligence.record_results(endpoint_key, test_config, result)
+
                 else:
                     result = await self.test_endpoint(endpoint)
 
@@ -831,22 +859,39 @@ class TestRunner:
                     endpoint_key = result.get('endpoint', '')
                     self._update_endpoint_metadata(endpoint_key, result.get('success', False))
 
+                    # Record results to hybrid intelligence for learning
+                    if self.hybrid_intelligence:
+                        test_config = endpoint.get('hybrid_metadata', {})
+                        self.hybrid_intelligence.record_results(endpoint_key, test_config, result)
+
             # Small delay between tests
             await asyncio.sleep(0.5)
 
-        # RL Learning: Update Q-values based on results
-        if self.use_rl and self.rl_optimizer:
-            logger.info("\n🎓 RL Learning from results...")
-            self.rl_optimizer.learn_from_results(self.results)
+        # Hybrid Intelligence Learning: Update from results
+        if self.use_rl and self.hybrid_intelligence:
+            logger.info("\n🎓 Hybrid Intelligence learning from results...")
 
-            # Show RL metrics
-            metrics = self.rl_optimizer.get_metrics()
-            logger.info(f"📊 RL Metrics:")
-            logger.info(f"   Time saved: {metrics['time_saved']:.1f}s")
-            logger.info(f"   Failures caught: {metrics['failures_caught']}")
-            logger.info(f"   Failures missed: {metrics['failures_missed']}")
-            logger.info(f"   Correct skips: {metrics['correct_skips']}")
-            logger.info(f"   Avg reward: {metrics['avg_reward_per_episode']:+.2f}")
+            # RL learning happens internally in hybrid intelligence
+            if self.rl_optimizer:
+                self.rl_optimizer.learn_from_results(self.results)
+
+                # Show RL metrics
+                metrics = self.rl_optimizer.get_metrics()
+                logger.info(f"📊 RL Metrics:")
+                logger.info(f"   Time saved: {metrics['time_saved']:.1f}s")
+                logger.info(f"   Failures caught: {metrics['failures_caught']}")
+                logger.info(f"   Failures missed: {metrics['failures_missed']}")
+                logger.info(f"   Correct skips: {metrics['correct_skips']}")
+                logger.info(f"   Avg reward: {metrics['avg_reward_per_episode']:+.2f}")
+
+            # Show intelligence summary
+            intelligence_summary = self.hybrid_intelligence.get_intelligence_summary()
+            if 'pattern_stats' in intelligence_summary:
+                stats = intelligence_summary['pattern_stats']
+                logger.info(f"\n🧠 Intelligence Summary:")
+                logger.info(f"   Total patterns learned: {stats.get('total_patterns', 0)}")
+                logger.info(f"   High confidence patterns: {stats.get('high_confidence_patterns', 0)}")
+                logger.info(f"   Insights generated: {stats.get('insights_generated', 0)}")
 
         # Print summary
         self._print_summary()

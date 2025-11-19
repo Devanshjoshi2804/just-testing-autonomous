@@ -30,6 +30,11 @@ from src.intelligence.adaptive_learner import (
     get_adaptive_learner
 )
 
+from src.intelligence.hybrid_coordinator import (
+    HybridIntelligence,
+    get_hybrid_intelligence
+)
+
 __all__ = [
     # Test Orchestrator
     'IntelligentTestOrchestrator',
@@ -53,4 +58,8 @@ __all__ = [
     'Pattern',
     'Insight',
     'get_adaptive_learner',
+
+    # Hybrid Coordinator
+    'HybridIntelligence',
+    'get_hybrid_intelligence',
 ]
