@@ -2,7 +2,10 @@
 OpenTelemetry Distributed Tracing
 Production-grade observability with distributed tracing
 """
-from typing import Optional, Dict, Any, Callable
+import uuid
+import contextvars
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, Callable, List
 from functools import wraps
 from contextlib import contextmanager
 
@@ -81,3 +84,66 @@ def start_span(name: str, **kwargs):
 
 def trace(name: Optional[str] = None, **kwargs):
     return get_tracer().trace_function(name, **kwargs)
+
+
+# ============================================================================
+# Context-based Tracing (Required by MetricsMiddleware)
+# ============================================================================
+
+@dataclass
+class Span:
+    name: str
+    trace_id: str
+    span_id: str
+    parent_id: Optional[str] = None
+    start_time: float = 0.0
+    end_time: Optional[float] = None
+    tags: Dict[str, Any] = field(default_factory=dict)
+    status: str = "active"
+    
+    def add_tag(self, key: str, value: Any):
+        self.tags[key] = value
+
+@dataclass
+class TracingContext:
+    trace_id: str
+    spans: List[Span] = field(default_factory=list)
+    
+    def create_span(self, name: str, operation: str = "", **kwargs) -> Span:
+        import time
+        span = Span(
+            name=name,
+            trace_id=self.trace_id,
+            span_id=uuid.uuid4().hex,
+            start_time=time.time()
+        )
+        for k, v in kwargs.items():
+            span.add_tag(k, v)
+        span.add_tag("operation", operation)
+        self.spans.append(span)
+        return span
+        
+    def finish_span(self, span: Span, status: str = "completed"):
+        import time
+        span.end_time = time.time()
+        span.status = status
+        
+    def get_trace_summary(self) -> Dict[str, Any]:
+        return {
+            "trace_id": self.trace_id,
+            "span_count": len(self.spans)
+        }
+
+_current_trace_context = contextvars.ContextVar("trace_context", default=None)
+
+def create_tracing_context(request_id: Optional[str] = None) -> TracingContext:
+    trace_id = request_id or uuid.uuid4().hex
+    ctx = TracingContext(trace_id=trace_id)
+    _current_trace_context.set(ctx)
+    return ctx
+
+def get_tracing_context() -> Optional[TracingContext]:
+    return _current_trace_context.get()
+
+def clear_tracing_context():
+    _current_trace_context.set(None)

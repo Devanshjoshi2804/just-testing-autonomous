@@ -79,14 +79,16 @@ class AuditEvent:
     event_type: AuditEventType
     timestamp: str
 
+    # Action details
+    action: str
+
     # Actor information
     actor_ip: str
     actor_user_agent: Optional[str] = None
     actor_user_id: Optional[str] = None
     actor_session_id: Optional[str] = None
 
-    # Action details
-    action: str
+    # Resource details
     resource_type: Optional[str] = None
     resource_id: Optional[str] = None
 

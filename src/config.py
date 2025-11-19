@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import List, Literal
 from pydantic_settings import BaseSettings
-from pydantic import Field, validator
+from pydantic import Field, field_validator, model_validator
 
 
 class Settings(BaseSettings):
@@ -212,13 +212,15 @@ class Settings(BaseSettings):
     # ========================================================================
     # Validators
     # ========================================================================
-    @validator("ALLOWED_EXTENSIONS", pre=True)
+    @field_validator("ALLOWED_EXTENSIONS", mode="before")
+    @classmethod
     def parse_extensions(cls, v):
         if isinstance(v, str):
             return [ext.strip() for ext in v.split(",")]
         return v
 
-    @validator("CORS_ALLOWED_ORIGINS", pre=True)
+    @field_validator("CORS_ALLOWED_ORIGINS", mode="before")
+    @classmethod
     def parse_cors_origins(cls, v):
         if v == "*":
             return v
@@ -226,7 +228,8 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in v.split(",")]
         return v
 
-    @root_validator
+    @model_validator(mode='before')
+    @classmethod
     def validate_production_security(cls, values):
         """
         Enforce security requirements in production environment

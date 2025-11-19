@@ -25,7 +25,6 @@ from src.workflow.state_transition_tester import StateTransitionTester
 from src.executors.test_runner import TestRunner
 from src.testing.semantic_test_generator import SemanticTestGenerator
 from src.testing.mutation_test_generator import MutationTestGenerator
-from src.rl.rl_agent import RLAgent
 
 
 class WorkflowPhase(str, Enum):
