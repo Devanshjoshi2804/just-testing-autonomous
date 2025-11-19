@@ -1,16 +1,18 @@
 # 🚀 AutoTest-RL: Intelligent API Testing with Reinforcement Learning
 
-**Backend-only system** that analyzes API documentation (PDF/JSON) and performs comprehensive automated testing using LLMs, RAG, and Reinforcement Learning.
+**Full-stack intelligent testing system** with a beautiful Python-based dashboard that analyzes API documentation (PDF/JSON) and performs comprehensive automated testing using LLMs, RAG, and Reinforcement Learning.
 
 ## 🌟 Features
 
+- **🎨 Interactive Dashboard**: Beautiful Streamlit-based UI for managing tests and viewing insights
 - **📄 Smart Document Understanding**: Upload PDF/JSON API docs → System extracts endpoints automatically
 - **🧠 LLM-Powered Test Generation**: AI agents generate complete test cases using RAG
+- **🤖 Hybrid Intelligence**: Combines RL + LLM + Pattern Learning for Claude Code-level sophistication
 - **🔄 Intelligent Retry Logic**: Auto-fixes failed tests by analyzing error responses
 - **🎯 Reinforcement Learning**: Learns optimal API testing sequences over time
 - **💾 Dual ChromaDB Architecture**: Separate stores for documentation and test flow state
 - **⚡ Async Execution**: Parallel test execution with smart dependency management
-- **📊 Comprehensive Reporting**: Detailed test results with coverage analysis
+- **📊 Comprehensive Reporting**: Real-time analytics, coverage metrics, and performance baselines
 
 ## 🏗️ Architecture
 
@@ -59,6 +61,7 @@ docker-compose ps
 
 ### 3. Access Services
 
+- **🎨 Frontend Dashboard**: http://localhost:8501 (NEW! Beautiful UI)
 - **API**: http://localhost:8000
 - **API Docs**: http://localhost:8000/docs (Swagger UI)
 - **ChromaDB**: http://localhost:8001
@@ -84,6 +87,7 @@ curl -X POST http://localhost:8000/api/v1/tests/start \
 
 | Service | Port | Description |
 |---------|------|-------------|
+| `frontend` | 8501 | **Streamlit dashboard (NEW!)** |
 | `api` | 8000 | Main FastAPI backend |
 | `chromadb` | 8001 | Vector database for RAG |
 | `redis` | 6379 | Task queue & caching |
