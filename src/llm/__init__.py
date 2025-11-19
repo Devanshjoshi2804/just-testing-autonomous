@@ -20,6 +20,13 @@ from src.llm.guardrails import (
     get_guardrails,
     TestGenerationGuardrails
 )
+from src.llm.chain_of_thought import (
+    ChainOfThoughtPrompt,
+    TestGenerationCoT,
+    create_cot_prompt_for_agent,
+    get_cot_template,
+    TEST_GENERATION_EXAMPLES
+)
 
 __all__ = [
     # Metrics & Monitoring
@@ -43,4 +50,11 @@ __all__ = [
     "with_guardrails",
     "get_guardrails",
     "TestGenerationGuardrails",
+
+    # Chain-of-Thought Prompting
+    "ChainOfThoughtPrompt",
+    "TestGenerationCoT",
+    "create_cot_prompt_for_agent",
+    "get_cot_template",
+    "TEST_GENERATION_EXAMPLES",
 ]
