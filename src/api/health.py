@@ -208,7 +208,7 @@ async def comprehensive_health_check() -> Dict[str, Any]:
     Perform comprehensive health check of all services
 
     Returns:
-        dict: Complete health status
+        dict: Complete health status with SLI/SLO metrics
     """
     # Run all checks in parallel
     redis_check, chromadb_check, ollama_check, celery_check, system_stats = await asyncio.gather(
@@ -232,6 +232,41 @@ async def comprehensive_health_check() -> Dict[str, Any]:
     celery_result = safe_result(celery_check, "celery")
     stats_result = safe_result(system_stats, "system")
 
+    # Get SLI/SLO metrics
+    slo_status = {}
+    try:
+        from src.observability.sli_slo import get_slo_health_status
+        slo_status = get_slo_health_status()
+    except Exception as e:
+        logger.warning(f"SLO health check failed: {e}")
+        slo_status = {"error": str(e)}
+
+    # Get circuit breaker status
+    circuit_breakers = {}
+    try:
+        from src.resilience.circuit_breaker import get_all_circuit_breakers
+        circuit_breakers = get_all_circuit_breakers()
+    except Exception as e:
+        logger.warning(f"Circuit breaker status check failed: {e}")
+
+    # Get LLM metrics
+    llm_metrics = {}
+    try:
+        from src.llm.llm_ops import get_metrics_tracker
+        tracker = get_metrics_tracker()
+        llm_metrics = tracker.get_statistics(hours=1)
+    except Exception as e:
+        logger.warning(f"LLM metrics check failed: {e}")
+
+    # Get audit log statistics
+    audit_stats = {}
+    try:
+        from src.observability.audit import get_audit_logger
+        audit_logger = get_audit_logger()
+        audit_stats = audit_logger.get_statistics(hours=24)
+    except Exception as e:
+        logger.warning(f"Audit stats check failed: {e}")
+
     # Determine overall status
     all_healthy = all([
         redis_result.get("status") == "healthy",
@@ -240,12 +275,15 @@ async def comprehensive_health_check() -> Dict[str, Any]:
         celery_result.get("status") == "healthy",
     ])
 
-    overall_status = "healthy" if all_healthy else "degraded"
+    # Check SLO status
+    slo_healthy = slo_status.get("overall_status") in ["healthy", "unknown"]
+
+    overall_status = "healthy" if (all_healthy and slo_healthy) else "degraded"
 
     return {
         "status": overall_status,
         "timestamp": datetime.now().isoformat(),
-        "version": "0.2.0",
+        "version": "0.3.0",
         "environment": settings.ENVIRONMENT,
         "services": {
             "redis": redis_result,
@@ -254,6 +292,10 @@ async def comprehensive_health_check() -> Dict[str, Any]:
             "celery": celery_result,
         },
         "system": stats_result,
+        "slo": slo_status,
+        "circuit_breakers": circuit_breakers,
+        "llm_metrics": llm_metrics,
+        "audit_stats": audit_stats,
     }
 
 

@@ -19,6 +19,17 @@ from src.observability.tracing import (
     start_span,
     trace
 )
+from src.observability.sli_slo import (
+    SLICollector,
+    SLI,
+    SLO,
+    SLIType,
+    SLOStatus,
+    get_sli_collector,
+    record_request_sli,
+    record_llm_sli,
+    get_slo_health_status
+)
 
 __all__ = [
     # Audit Logging
@@ -37,4 +48,15 @@ __all__ = [
     "get_tracer",
     "start_span",
     "trace",
+
+    # SLI/SLO Monitoring
+    "SLICollector",
+    "SLI",
+    "SLO",
+    "SLIType",
+    "SLOStatus",
+    "get_sli_collector",
+    "record_request_sli",
+    "record_llm_sli",
+    "get_slo_health_status",
 ]

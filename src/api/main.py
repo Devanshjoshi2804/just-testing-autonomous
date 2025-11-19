@@ -23,6 +23,8 @@ from src.api.middleware.security import security_headers_middleware
 from src.api.middleware.rate_limiter import rate_limit_middleware
 from src.api.middleware.error_handler import register_error_handlers
 from src.api.middleware.compression import add_compression_middleware
+from src.observability.audit import audit_middleware
+from src.observability.tracing import init_tracing
 from src.exceptions import AutoTestException, create_error_response
 
 # ============================================================================
@@ -93,6 +95,24 @@ async def lifespan(app: FastAPI):
     if settings.ENVIRONMENT.lower() in ('production', 'prod') and not settings.REQUIRE_AUTH:
         logger.error("🚨 SECURITY WARNING: Authentication disabled in production!")
 
+    # Initialize observability features
+    try:
+        # Initialize distributed tracing
+        tracer = init_tracing(
+            service_name="autotest-rl",
+            environment=settings.ENVIRONMENT,
+            enable_console=(settings.ENVIRONMENT == "development")
+        )
+        logger.info("✅ Distributed tracing initialized")
+
+        # Initialize audit logging
+        from src.observability.audit import get_audit_logger
+        audit_logger = get_audit_logger()
+        logger.info(f"✅ Audit logging initialized (retention: {audit_logger.retention_days} days)")
+
+    except Exception as e:
+        logger.warning(f"⚠️  Observability initialization warning: {e}")
+
     logger.info("✅ AutoTest-RL API startup complete")
 
     # ============================================================================
@@ -138,6 +158,13 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Register enhanced error handlers
+register_error_handlers(app)
+logger.info("✅ Enhanced error handlers registered")
+
+# Add response compression
+add_compression_middleware(app, minimum_size=1024, compression_level=6)
+
 # ============================================================================
 # CORS Middleware
 # ============================================================================
@@ -160,6 +187,9 @@ app.add_middleware(
 # ============================================================================
 # Security headers (applied first)
 app.middleware("http")(security_headers_middleware)
+
+# Audit logging (early to capture all requests)
+app.middleware("http")(audit_middleware)
 
 # Rate limiting (applied early to reject bad requests quickly)
 if settings.ENABLE_RATE_LIMITING:
