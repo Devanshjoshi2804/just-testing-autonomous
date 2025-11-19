@@ -16,6 +16,9 @@ from src.llm.llm_ops import get_metrics_tracker
 from src.resilience.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from src.observability.sli_slo import record_llm_sli
 
+# 🔥 CRITICAL: Distributed tracing for observability
+from src.observability.tracing import start_span
+
 
 class BaseAgent:
     """
@@ -89,117 +92,137 @@ class BaseAgent:
         Returns:
             LLM response text
 
-        🔥 PRODUCTION-READY: Includes guardrails, circuit breaker, cost tracking
+        🔥 PRODUCTION-READY: Includes guardrails, circuit breaker, cost tracking, tracing
         """
         start_time = time.time()
 
-        # 🔥 Step 1: Validate INPUT with guardrails (check for PII injection)
-        try:
-            input_validation = self.guardrails.validate_input(prompt)
-            if not input_validation.passed:
-                logger.warning(
-                    f"{self.agent_name}: Input validation failed",
-                    violations=input_validation.violations
-                )
-                # For now, log warning but don't block (could be too strict)
-        except Exception as guard_error:
-            logger.warning(f"Guardrail input check failed: {guard_error}")
+        # 🔥 DISTRIBUTED TRACING: Create parent span for entire LLM invocation
+        with start_span(
+            f"llm.invoke.{self.agent_name}",
+            attributes={
+                "agent.name": self.agent_name,
+                "llm.provider": self.llm_provider,
+                "llm.model": self.llm_model,
+                "prompt.length": len(prompt)
+            }
+        ) as parent_span:
 
-        # 🔥 Step 2: Call LLM with circuit breaker protection
-        try:
-            def _call_llm():
-                """Inner function for circuit breaker wrapping"""
-                # For Ollama, combine system and user prompts
-                if self.llm_provider == "ollama":
-                    full_prompt = prompt
-                    if system_prompt:
-                        full_prompt = f"{system_prompt}\n\n{prompt}"
-
-                    response = self.llm.invoke(full_prompt)
-                    return response if isinstance(response, str) else str(response)
-
-                else:
-                    # For chat models (OpenAI, Anthropic, Groq)
-                    messages = []
-                    if system_prompt:
-                        messages.append(("system", system_prompt))
-                    messages.append(("human", prompt))
-
-                    response = self.llm.invoke(messages)
-                    return response.content
-
-            # Execute through circuit breaker
-            result = self.circuit_breaker.call(_call_llm)
-
-        except Exception as e:
-            logger.error(f"{self.agent_name} LLM invocation failed: {e}")
-
-            # 🔥 Record failed LLM call in SLI
+            # 🔥 Step 1: Validate INPUT with guardrails (check for PII injection)
             try:
-                record_llm_sli(success=False, tokens=0, cost_usd=0.0)
-            except Exception as sli_error:
-                logger.warning(f"Failed to record LLM SLI: {sli_error}")
+                input_validation = self.guardrails.validate_input(prompt)
+                if not input_validation.passed:
+                    logger.warning(
+                        f"{self.agent_name}: Input validation failed",
+                        violations=input_validation.violations
+                    )
+                    # For now, log warning but don't block (could be too strict)
+            except Exception as guard_error:
+                logger.warning(f"Guardrail input check failed: {guard_error}")
 
-            raise
+            # 🔥 Step 2: Call LLM with circuit breaker protection
+            try:
+                def _call_llm():
+                    """Inner function for circuit breaker wrapping"""
+                    # For Ollama, combine system and user prompts
+                    if self.llm_provider == "ollama":
+                        full_prompt = prompt
+                        if system_prompt:
+                            full_prompt = f"{system_prompt}\n\n{prompt}"
 
-        # 🔥 Step 3: Validate OUTPUT with guardrails
-        try:
-            output_validation = self.guardrails.validate(result)
+                        response = self.llm.invoke(full_prompt)
+                        return response if isinstance(response, str) else str(response)
 
-            if not output_validation.passed:
-                logger.warning(
-                    f"{self.agent_name}: Output validation failed",
-                    violations=output_validation.violations
+                    else:
+                        # For chat models (OpenAI, Anthropic, Groq)
+                        messages = []
+                        if system_prompt:
+                            messages.append(("system", system_prompt))
+                        messages.append(("human", prompt))
+
+                        response = self.llm.invoke(messages)
+                        return response.content
+
+                # Execute through circuit breaker
+                result = self.circuit_breaker.call(_call_llm)
+
+            except Exception as e:
+                logger.error(f"{self.agent_name} LLM invocation failed: {e}")
+
+                # 🔥 Record failed LLM call in SLI
+                try:
+                    record_llm_sli(success=False, tokens=0, cost_usd=0.0)
+                except Exception as sli_error:
+                    logger.warning(f"Failed to record LLM SLI: {sli_error}")
+
+                # Add trace event for error
+                parent_span.add_event("llm_invocation_failed", {"error": str(e)})
+                raise
+
+            # 🔥 Step 3: Validate OUTPUT with guardrails
+            try:
+                output_validation = self.guardrails.validate(result)
+
+                if not output_validation.passed:
+                    logger.warning(
+                        f"{self.agent_name}: Output validation failed",
+                        violations=output_validation.violations
+                    )
+
+                    # If PII detected, use sanitized version
+                    if output_validation.sanitized_output:
+                        logger.info(f"{self.agent_name}: Using PII-redacted output")
+                        result = output_validation.sanitized_output
+                        parent_span.add_event("pii_redacted")
+
+            except Exception as guard_error:
+                logger.warning(f"Guardrail output check failed: {guard_error}")
+
+            # 🔥 Step 4: Track metrics (tokens, cost, latency)
+            try:
+                latency_ms = (time.time() - start_time) * 1000
+
+                # Estimate token counts (rough approximation: 1 token ≈ 4 chars)
+                input_tokens = len(prompt) // 4
+                output_tokens = len(result) // 4
+
+                # Record metrics
+                self.metrics_tracker.record_call(
+                    provider=self.llm_provider,
+                    model=self.llm_model,
+                    prompt=prompt[:100],  # Store first 100 chars only
+                    response=result[:100],
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_ms=latency_ms,
+                    success=True
                 )
 
-                # If PII detected, use sanitized version
-                if output_validation.sanitized_output:
-                    logger.info(f"{self.agent_name}: Using PII-redacted output")
-                    result = output_validation.sanitized_output
-
-        except Exception as guard_error:
-            logger.warning(f"Guardrail output check failed: {guard_error}")
-
-        # 🔥 Step 4: Track metrics (tokens, cost, latency)
-        try:
-            latency_ms = (time.time() - start_time) * 1000
-
-            # Estimate token counts (rough approximation: 1 token ≈ 4 chars)
-            input_tokens = len(prompt) // 4
-            output_tokens = len(result) // 4
-
-            # Record metrics
-            self.metrics_tracker.record_call(
-                provider=self.llm_provider,
-                model=self.llm_model,
-                prompt=prompt[:100],  # Store first 100 chars only
-                response=result[:100],
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                latency_ms=latency_ms,
-                success=True
-            )
-
-            # 🔥 Record LLM SLI
-            record_llm_sli(
-                success=True,
-                tokens=input_tokens + output_tokens,
-                cost_usd=self.metrics_tracker._calculate_cost(
-                    self.llm_model,
-                    input_tokens,
-                    output_tokens
+                # 🔥 Record LLM SLI
+                record_llm_sli(
+                    success=True,
+                    tokens=input_tokens + output_tokens,
+                    cost_usd=self.metrics_tracker._calculate_cost(
+                        self.llm_model,
+                        input_tokens,
+                        output_tokens
+                    )
                 )
-            )
 
-            logger.debug(
-                f"{self.agent_name} LLM call: {len(result)} chars, "
-                f"{latency_ms:.0f}ms, ~{input_tokens + output_tokens} tokens"
-            )
+                # Add metrics to trace span
+                parent_span.set_attribute("llm.input_tokens", input_tokens)
+                parent_span.set_attribute("llm.output_tokens", output_tokens)
+                parent_span.set_attribute("llm.latency_ms", latency_ms)
+                parent_span.set_attribute("llm.success", True)
 
-        except Exception as metrics_error:
-            logger.warning(f"Failed to record metrics: {metrics_error}")
+                logger.debug(
+                    f"{self.agent_name} LLM call: {len(result)} chars, "
+                    f"{latency_ms:.0f}ms, ~{input_tokens + output_tokens} tokens"
+                )
 
-        return result
+            except Exception as metrics_error:
+                logger.warning(f"Failed to record metrics: {metrics_error}")
+
+            return result
 
     async def ainvoke(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """

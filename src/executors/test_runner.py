@@ -37,6 +37,9 @@ from src.learning.constraint_updater import ConstraintUpdater
 from src.metrics.coverage_tracker import CoverageTracker
 from src.metrics.coverage_reporter import CoverageReporter
 
+# 🔥 CRITICAL: Distributed tracing for observability
+from src.observability.tracing import start_span
+
 
 class TestRunner:
     """
@@ -201,76 +204,107 @@ class TestRunner:
             Test result dict
         """
         endpoint_key = f"{endpoint.get('method', 'GET')} {endpoint.get('path', '')}"
-        logger.info(f"\n{'=' * 80}")
-        logger.info(f"🧪 Testing: {endpoint_key}")
-        logger.info(f"{'=' * 80}")
 
-        # Generate initial test payload
-        logger.info("🤖 Generating test payload with AI...")
-        test_payload = self.generator.generate_test_payload(endpoint, test_type="positive")
+        # 🔥 DISTRIBUTED TRACING: Create span for endpoint test
+        span = start_span(
+            f"test.endpoint",
+            attributes={
+                "endpoint.method": endpoint.get('method', 'GET'),
+                "endpoint.path": endpoint.get('path', ''),
+                "endpoint.auth_required": endpoint.get('auth_required', False),
+                "test.max_retries": self.max_retries
+            }
+        ).__enter__()
 
-        # Prepare headers
-        test_headers = {"Content-Type": "application/json"}
-        if headers:
-            test_headers.update(headers)
+        try:
+            logger.info(f"\n{'=' * 80}")
+            logger.info(f"🧪 Testing: {endpoint_key}")
+            logger.info(f"{'=' * 80}")
 
-        # Add authentication if needed
-        if endpoint.get('auth_required'):
-            token = await self._get_auth_token()
-            if token:
-                test_headers['Authorization'] = f"Bearer {token}"
-                logger.info("🔑 Added authentication token")
+            # Generate initial test payload
+            logger.info("🤖 Generating test payload with AI...")
+            test_payload = self.generator.generate_test_payload(endpoint, test_type="positive")
 
-        # Try testing with retries
-        for attempt in range(1, self.max_retries + 1):
-            logger.info(f"\n🚀 Attempt {attempt}/{self.max_retries}")
+            # Prepare headers
+            test_headers = {"Content-Type": "application/json"}
+            if headers:
+                test_headers.update(headers)
 
-            result = await self._execute_request(
-                endpoint, test_payload, test_headers, attempt
-            )
+            # Add authentication if needed
+            if endpoint.get('auth_required'):
+                token = await self._get_auth_token()
+                if token:
+                    test_headers['Authorization'] = f"Bearer {token}"
+                    logger.info("🔑 Added authentication token")
 
-            # If successful, return
-            if result['success']:
-                logger.info(f"✅ SUCCESS on attempt {attempt}")
+            # Try testing with retries
+            for attempt in range(1, self.max_retries + 1):
+                logger.info(f"\n🚀 Attempt {attempt}/{self.max_retries}")
 
-                # Set baseline expected response on first successful test
-                if endpoint_key not in self.expected_responses:
-                    self.set_expected_response(
-                        endpoint_key,
-                        result['status_code'],
-                        result['response']
-                    )
-                    logger.debug(f"📝 Set baseline response for {endpoint_key}")
+                result = await self._execute_request(
+                    endpoint, test_payload, test_headers, attempt
+                )
 
-                return result
+                # If successful, return
+                if result['success']:
+                    logger.info(f"✅ SUCCESS on attempt {attempt}")
 
-            # If last attempt, return failure
-            if attempt == self.max_retries:
-                logger.warning(f"❌ FAILED after {self.max_retries} attempts")
-                return result
+                    # Set baseline expected response on first successful test
+                    if endpoint_key not in self.expected_responses:
+                        self.set_expected_response(
+                            endpoint_key,
+                            result['status_code'],
+                            result['response']
+                        )
+                        logger.debug(f"📝 Set baseline response for {endpoint_key}")
 
-            # Try to fix the error
-            logger.info(f"🔧 Analyzing error and generating fix...")
+                    # Add success metrics to span
+                    span.set_attribute("test.success", True)
+                    span.set_attribute("test.attempts", attempt)
+                    span.set_attribute("test.status_code", result['status_code'])
+                    span.__exit__(None, None, None)
+                    return result
 
-            # Check if should retry
-            if not self.fixer.should_retry(result['status_code'], result['response']):
-                logger.info("⏭️  Error not retriable, skipping remaining attempts")
-                return result
+                # If last attempt, return failure
+                if attempt == self.max_retries:
+                    logger.warning(f"❌ FAILED after {self.max_retries} attempts")
+                    span.set_attribute("test.success", False)
+                    span.set_attribute("test.attempts", attempt)
+                    span.add_event("test_failed_all_attempts")
+                    span.__exit__(None, None, None)
+                    return result
 
-            # Generate fix
-            test_payload = self.fixer.fix_failed_test(
-                endpoint,
-                test_payload,
-                result['response'],
-                result['status_code']
-            )
+                # Try to fix the error
+                logger.info(f"🔧 Analyzing error and generating fix...")
 
-            logger.info(f"✨ Generated fix, retrying...")
+                # Check if should retry
+                if not self.fixer.should_retry(result['status_code'], result['response']):
+                    logger.info("⏭️  Error not retriable, skipping remaining attempts")
+                    span.set_attribute("test.success", False)
+                    span.set_attribute("test.not_retriable", True)
+                    span.__exit__(None, None, None)
+                    return result
 
-            # Small delay before retry
-            await asyncio.sleep(settings.RETRY_DELAY_SECONDS)
+                # Generate fix
+                test_payload = self.fixer.fix_failed_test(
+                    endpoint,
+                    test_payload,
+                    result['response'],
+                    result['status_code']
+                )
 
-        return result  # Should never reach here, but just in case
+                logger.info(f"✨ Generated fix, retrying...")
+
+                # Small delay before retry
+                await asyncio.sleep(settings.RETRY_DELAY_SECONDS)
+
+            span.__exit__(None, None, None)
+            return result  # Should never reach here, but just in case
+
+        except Exception as e:
+            span.add_event("test_exception", {"error": str(e)})
+            span.__exit__(type(e), e, e.__traceback__)
+            raise
 
     async def test_endpoint_comprehensive(
         self,
