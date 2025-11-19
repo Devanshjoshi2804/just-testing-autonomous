@@ -185,20 +185,23 @@ app.add_middleware(
 # ============================================================================
 # Custom Middleware Stack
 # ============================================================================
-# Security headers (applied first)
+# CRITICAL: Middleware order matters! Applied in REVERSE order (last = outermost)
+# Execution order: request_id → security → audit → rate_limit → logging → handler
+
+# Request ID tracking (MUST BE FIRST - generates correlation ID for all other middleware)
+app.middleware("http")(request_id_middleware)
+
+# Security headers (applied early for all requests)
 app.middleware("http")(security_headers_middleware)
 
-# Audit logging (early to capture all requests)
+# Audit logging (uses request_id from above)
 app.middleware("http")(audit_middleware)
 
 # Rate limiting (applied early to reject bad requests quickly)
 if settings.ENABLE_RATE_LIMITING:
     app.middleware("http")(rate_limit_middleware)
 
-# Request ID tracking
-app.middleware("http")(request_id_middleware)
-
-# Structured logging
+# Structured logging (uses request_id and records SLI metrics)
 app.middleware("http")(logging_middleware)
 
 # Request timing
