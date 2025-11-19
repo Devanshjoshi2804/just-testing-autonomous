@@ -306,8 +306,13 @@ def rate_limit(
             # Call the actual endpoint
             response = await func(*args, **kwargs)
 
-            # TODO: Add rate limit headers to response
-            # This would require middleware or response modification
+            # 🔥 ENHANCEMENT: Add rate limit headers to response for client visibility
+            if hasattr(response, 'headers'):
+                remaining = max(0, max_limit - current - 1)  # -1 for current request
+                response.headers["X-RateLimit-Limit"] = str(max_limit)
+                response.headers["X-RateLimit-Remaining"] = str(remaining)
+                response.headers["X-RateLimit-Reset"] = str(reset_time)
+                logger.debug(f"Added rate limit headers: {remaining}/{max_limit} remaining")
 
             return response
 
