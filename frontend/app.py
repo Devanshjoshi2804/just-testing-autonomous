@@ -102,7 +102,7 @@ def main():
 
     # Sidebar
     with st.sidebar:
-        st.image("https://via.placeholder.com/300x100/667eea/ffffff?text=AutoTest-RL", use_container_width=True)
+        st.image("https://via.placeholder.com/300x100/667eea/ffffff?text=AutoTest-RL", width=300)
         st.markdown("---")
 
         # Navigation
@@ -286,23 +286,46 @@ def show_dashboard():
 
 def show_documents():
     """Document upload and management"""
-    from pages.documents import render_documents_page
-    render_documents_page(API_BASE_URL)
+    try:
+        from pages.documents import render_documents_page
+        render_documents_page(API_BASE_URL)
+    except Exception as e:
+        st.error(f"Error loading documents page: {str(e)}")
+        st.info("Please check that all dependencies are installed correctly.")
 
 def show_tests():
     """Test execution and results"""
-    from pages.tests import render_tests_page
-    render_tests_page(API_BASE_URL)
+    try:
+        from pages.tests import render_tests_page
+        render_tests_page(API_BASE_URL)
+    except Exception as e:
+        st.error(f"Error loading tests page: {str(e)}")
+        st.info("Please check that all dependencies are installed correctly.")
 
 def show_intelligence():
     """AI Intelligence insights"""
-    from pages.intelligence import render_intelligence_page
-    render_intelligence_page(API_BASE_URL)
+    try:
+        from pages.intelligence import render_intelligence_page
+        render_intelligence_page(API_BASE_URL)
+    except Exception as e:
+        st.error(f"Error loading intelligence page: {str(e)}")
+        st.info("Please check that all dependencies are installed correctly.")
 
 def show_analytics():
     """Analytics and reporting"""
-    from pages.analytics import render_analytics_page
-    render_analytics_page(API_BASE_URL)
+    try:
+        from pages.analytics import render_analytics_page
+        render_analytics_page(API_BASE_URL)
+    except Exception as e:
+        st.error(f"Error loading analytics page: {str(e)}")
+        st.info("Please check that all dependencies are installed correctly.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error(f"Application Error: {str(e)}")
+        st.write("Please check:")
+        st.write("1. All dependencies are installed: `pip install -r requirements.txt`")
+        st.write("2. API is running at:", API_BASE_URL)
+        st.write("3. All page modules are present in the pages/ directory")
