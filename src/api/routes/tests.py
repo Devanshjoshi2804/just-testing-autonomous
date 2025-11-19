@@ -171,6 +171,43 @@ async def run_test_session_async(
 
             logger.info(f"✅ Test session completed: {session_id} ({summary['passed']}/{summary['total_tests']} passed)")
 
+            # 🔥 CRITICAL: Audit log test completion
+            try:
+                # Need to get request object - we'll use a mock for background tasks
+                # In production, consider passing request context through background tasks
+                from fastapi import Request
+                from starlette.datastructures import Headers
+
+                # Create minimal request context for audit logging
+                mock_request = type('obj', (object,), {
+                    'state': type('obj', (object,), {'request_id': session_id})(),
+                    'client': type('obj', (object,), {'host': 'background-task'})(),
+                    'headers': Headers({'user-agent': 'test-runner-background'})
+                })()
+
+                audit_log(
+                    AuditEventType.TEST_COMPLETED,
+                    f"Test session completed: {summary['passed']}/{summary['total_tests']} passed",
+                    mock_request,
+                    resource_type="test_session",
+                    resource_id=session_id,
+                    severity=AuditSeverity.INFO,
+                    metadata={
+                        "document_id": document_id,
+                        "total_tests": summary['total_tests'],
+                        "passed": summary['passed'],
+                        "failed": summary['failed'],
+                        "success_rate": summary['success_rate'],
+                        "total_time_seconds": summary['total_time'],
+                        "avg_time_seconds": summary['avg_time'],
+                        "total_attempts": summary['total_attempts'],
+                        "healing_actions": summary.get('healing_report', {}).get('total_healing_actions', 0),
+                        "endpoints_healed": summary.get('healing_report', {}).get('endpoints_healed', 0)
+                    }
+                )
+            except Exception as audit_error:
+                logger.warning(f"Failed to audit log test completion: {audit_error}")
+
     except Exception as e:
         logger.error(f"Test session failed: {session_id} - {e}", exc_info=True)
 
@@ -182,6 +219,34 @@ async def run_test_session_async(
                 "updated_at": datetime.now(),
                 "completed_at": datetime.now()
             })
+
+        # 🔥 CRITICAL: Audit log test failure
+        try:
+            from fastapi import Request
+            from starlette.datastructures import Headers
+
+            # Create minimal request context for audit logging
+            mock_request = type('obj', (object,), {
+                'state': type('obj', (object,), {'request_id': session_id})(),
+                'client': type('obj', (object,), {'host': 'background-task'})(),
+                'headers': Headers({'user-agent': 'test-runner-background'})
+            })()
+
+            audit_log(
+                AuditEventType.TEST_FAILED,
+                f"Test session failed: {str(e)}",
+                mock_request,
+                resource_type="test_session",
+                resource_id=session_id,
+                severity=AuditSeverity.ERROR,
+                metadata={
+                    "document_id": document_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                }
+            )
+        except Exception as audit_error:
+            logger.warning(f"Failed to audit log test failure: {audit_error}")
 
     finally:
         # Clean up lock when session is done
