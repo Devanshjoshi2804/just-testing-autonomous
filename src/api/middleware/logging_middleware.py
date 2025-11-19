@@ -9,6 +9,9 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from loguru import logger
 
+# Import SLI/SLO recording
+from src.observability.sli_slo import record_request_sli
+
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """
@@ -108,6 +111,8 @@ async def logging_middleware(request: Request, call_next: Callable) -> Response:
     """
     Functional logging middleware
     Simpler version without request/response body logging
+
+    🔥 NEW: Now records SLI metrics for monitoring
     """
     start_time = time.time()
     request_id = getattr(request.state, "request_id", "unknown")
@@ -123,6 +128,7 @@ async def logging_middleware(request: Request, call_next: Callable) -> Response:
     try:
         response = await call_next(request)
         process_time = time.time() - start_time
+        latency_ms = process_time * 1000
 
         logger.info(
             "request_completed",
@@ -130,23 +136,38 @@ async def logging_middleware(request: Request, call_next: Callable) -> Response:
             method=request.method,
             path=request.url.path,
             status_code=response.status_code,
-            process_time_ms=round(process_time * 1000, 2),
+            process_time_ms=round(latency_ms, 2),
         )
 
         response.headers["X-Process-Time"] = str(round(process_time, 4))
+
+        # 🔥 CRITICAL FIX: Record SLI metrics for monitoring
+        success = response.status_code < 400
+        try:
+            record_request_sli(success=success, latency_ms=latency_ms)
+        except Exception as sli_error:
+            # Don't fail request if SLI recording fails
+            logger.warning(f"Failed to record SLI: {sli_error}")
 
         return response
 
     except Exception as e:
         process_time = time.time() - start_time
+        latency_ms = process_time * 1000
 
         logger.exception(
             "request_failed",
             request_id=request_id,
             method=request.method,
             path=request.url.path,
-            process_time_ms=round(process_time * 1000, 2),
+            process_time_ms=round(latency_ms, 2),
             error=str(e),
         )
+
+        # 🔥 CRITICAL FIX: Record failed request SLI
+        try:
+            record_request_sli(success=False, latency_ms=latency_ms)
+        except Exception as sli_error:
+            logger.warning(f"Failed to record SLI for failed request: {sli_error}")
 
         raise

@@ -31,6 +31,9 @@ from src.executors.test_runner import TestRunner
 from src.rag.doc_store import DocumentStore
 from src.api.routes.documents import documents_db
 
+# 🔥 CRITICAL: Import audit logging for compliance
+from src.observability.audit import audit_log, AuditEventType, AuditSeverity
+
 
 router = APIRouter()
 
@@ -312,6 +315,26 @@ async def start_test_execution(
         )
 
         logger.info(f"🚀 Started background test execution: {session_id}")
+
+        # 🔥 CRITICAL: Audit log test session start
+        try:
+            audit_log(
+                AuditEventType.TEST_STARTED,
+                f"User started test session for document {request.document_id}",
+                http_request,
+                resource_type="test_session",
+                resource_id=session_id,
+                metadata={
+                    "document_id": request.document_id,
+                    "total_endpoints": len(endpoints),
+                    "max_retries": request.max_retries,
+                    "use_optimal_order": request.use_optimal_order,
+                    "comprehensive_mode": request.comprehensive_mode,
+                    "estimated_duration_seconds": estimated_duration
+                }
+            )
+        except Exception as audit_error:
+            logger.warning(f"Failed to audit log test start: {audit_error}")
 
         # Return session response
         return TestSessionResponse(

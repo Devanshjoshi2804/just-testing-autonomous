@@ -31,6 +31,9 @@ from src.analysis.constraint_extractor import ConstraintExtractor
 from src.workflow.dependency_graph import DependencyGraph
 from src.workflow.state_transition_tester import StateTransitionTester
 
+# 🔥 CRITICAL: Import audit logging for compliance
+from src.observability.audit import audit_log, AuditEventType, AuditSeverity
+
 
 router = APIRouter()
 
@@ -372,6 +375,29 @@ async def upload_document(
         )
 
         logger.info(f"✅ Document uploaded successfully: {doc_id}")
+
+        # 🔥 CRITICAL: Audit log document upload for compliance (SOC2/GDPR)
+        try:
+            audit_log(
+                AuditEventType.DOCUMENT_UPLOAD,
+                f"User uploaded API documentation: {file.filename}",
+                request,
+                resource_type="document",
+                resource_id=doc_id,
+                metadata={
+                    "filename": file.filename,
+                    "file_size": file_size,
+                    "file_type": file_ext,
+                    "endpoints_found": len(endpoints),
+                    "chunks_created": len(chunks),
+                    "base_url": extracted_base_url,
+                    "has_constraints": total_with_constraints > 0,
+                    "has_workflows": len(workflow_sequences) > 0
+                }
+            )
+        except Exception as audit_error:
+            # Don't fail request if audit logging fails
+            logger.warning(f"Failed to audit log document upload: {audit_error}")
 
         return response
 
