@@ -22,6 +22,9 @@ from src.models import (
     validate_safe_string
 )
 from src.api.middleware.rate_limiter import rate_limit
+
+# 🔥 CRITICAL: Response caching for performance
+from src.api.middleware.cache import cached
 from src.parsers.document_parser import DocumentParser
 from src.parsers.enhanced_document_parser import EnhancedDocumentParser
 from src.parsers.text_splitter import DocumentChunker
@@ -414,8 +417,13 @@ async def upload_document(
     summary="List Documents",
     description="Get list of all uploaded documents"
 )
-async def list_documents():
-    """List all uploaded documents"""
+@cached(ttl=30, key_prefix="documents:list")  # Cache for 30 seconds
+async def list_documents(request: Request):
+    """
+    List all uploaded documents
+
+    🔥 CACHED: Results cached for 30s for performance optimization
+    """
     try:
         docs = []
         for doc_id, metadata in documents_db.items():
@@ -445,8 +453,13 @@ async def list_documents():
     summary="Get Document Details",
     description="Get detailed information about a specific document"
 )
-async def get_document(document_id: str):
-    """Get document details including endpoints"""
+@cached(ttl=60, key_prefix="documents:detail")  # Cache for 60 seconds
+async def get_document(request: Request, document_id: str):
+    """
+    Get document details including endpoints
+
+    🔥 CACHED: Results cached for 60s for performance optimization
+    """
     if document_id not in documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
 

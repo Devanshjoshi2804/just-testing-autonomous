@@ -23,6 +23,7 @@ from src.api.middleware.security import security_headers_middleware
 from src.api.middleware.rate_limiter import rate_limit_middleware
 from src.api.middleware.error_handler import register_error_handlers
 from src.api.middleware.compression import add_compression_middleware
+from src.api.middleware.cache import cached
 from src.observability.audit import audit_middleware
 from src.observability.tracing import init_tracing
 from src.exceptions import AutoTestException, create_error_response
@@ -246,8 +247,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Health Check Endpoints
 # ============================================================================
 @app.get("/health")
-async def health_check():
-    """Simple health check endpoint for Docker"""
+@cached(ttl=5, key_prefix="health:basic")  # Cache for 5 seconds
+async def health_check(request: Request):
+    """
+    Simple health check endpoint for Docker
+
+    🔥 CACHED: Results cached for 5s to reduce load from frequent polling
+    """
     return {
         "status": "healthy",
         "environment": settings.ENVIRONMENT,
@@ -256,14 +262,24 @@ async def health_check():
 
 
 @app.get("/health/detailed")
-async def health_detailed():
-    """Comprehensive health check with all service statuses"""
+@cached(ttl=10, key_prefix="health:detailed")  # Cache for 10 seconds
+async def health_detailed(request: Request):
+    """
+    Comprehensive health check with all service statuses
+
+    🔥 CACHED: Results cached for 10s to reduce dependency checks
+    """
     return await comprehensive_health_check()
 
 
 @app.get("/health/ready")
-async def health_ready():
-    """Readiness check - are all dependencies ready?"""
+@cached(ttl=5, key_prefix="health:ready")  # Cache for 5 seconds
+async def health_ready(request: Request):
+    """
+    Readiness check - are all dependencies ready?
+
+    🔥 CACHED: Results cached for 5s for frequent K8s probes
+    """
     result = await readiness_check()
     status_code = 200 if result["ready"] else 503
     return JSONResponse(status_code=status_code, content=result)
